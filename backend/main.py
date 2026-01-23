@@ -1,20 +1,25 @@
 from fastapi import FastAPI
 from dotenv import load_dotenv
 
-from database import init_db
+from database import init_db, get_all_jobs
 
 # Load environment variables
 load_dotenv()
 
-# Create the FastAPI app (ONLY ONCE)
+# Create FastAPI app
 app = FastAPI(title="Anvalyx API")
 
-# Health check endpoint (required for Render)
+# Health check
 @app.get("/")
 def health():
     return {"status": "ok"}
 
-# Run on startup
+# Get jobs API
+@app.get("/jobs")
+def get_jobs():
+    return get_all_jobs()
+
+# Startup event
 @app.on_event("startup")
 def startup():
     init_db()
