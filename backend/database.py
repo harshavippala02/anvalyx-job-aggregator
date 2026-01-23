@@ -1,12 +1,9 @@
 import sqlite3
 import os
 
-# Writable directory for Render
-DB_DIR = "/tmp/anvalyx"
-DB_PATH = os.path.join(DB_DIR, "anvalyx.db")
+DB_PATH = "/tmp/anvalyx.db"
 
 def get_connection():
-    os.makedirs(DB_DIR, exist_ok=True)
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def init_db():
@@ -23,46 +20,38 @@ def init_db():
         )
     """)
 
+    cursor.execute("SELECT COUNT(*) FROM jobs")
+    count = cursor.fetchone()[0]
+
+    if count == 0:
+        cursor.executemany("""
+            INSERT INTO jobs (title, company, location, url)
+            VALUES (?, ?, ?, ?)
+        """, [
+            ("Data Analyst", "Google", "USA", "https://careers.google.com"),
+            ("Business Analyst", "Amazon", "USA", "https://amazon.jobs"),
+            ("BI Analyst", "Microsoft", "USA", "https://careers.microsoft.com"),
+            ("Analytics Engineer", "Meta", "USA", "https://www.metacareers.com"),
+            ("Product Analyst", "Netflix", "USA", "https://jobs.netflix.com"),
+        ])
+
     conn.commit()
     conn.close()
 
 def get_all_jobs():
     conn = get_connection()
     cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id, title, company, location, url
-        FROM jobs
-        ORDER BY id DESC
-        LIMIT 50
-    """)
-
+    cursor.execute("SELECT id, title, company, location, url FROM jobs")
     rows = cursor.fetchall()
     conn.close()
 
-    jobs = []
-    for row in rows:
-        jobs.append({
-            "id": row[0],
-            "title": row[1],
-            "company": row[2],
-            "location": row[3],
-            "url": row[4],
-        })
-
-    return jobs
-    
-def insert_sample_jobs():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO jobs (title, company, location, url)
-        VALUES
-        ('Data Analyst', 'Google', 'United States', 'https://careers.google.com'),
-        ('Business Analyst', 'Amazon', 'United States', 'https://amazon.jobs'),
-        ('Analytics Engineer', 'Meta', 'United States', 'https://www.metacareers.com')
-    """)
-
-    conn.commit()
-    conn.close()
+    return [
+        {
+            "id": r[0],
+            "title": r[1],
+            "company": r[2],
+            "location": r[3],
+            "url": r[4],
+        }
+        for r in rows
+    ]
