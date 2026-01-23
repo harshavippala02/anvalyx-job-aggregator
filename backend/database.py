@@ -1,12 +1,11 @@
 import sqlite3
 import os
 
-# Always use a writable location on Render
+# Writable directory for Render
 DB_DIR = "/tmp/anvalyx"
 DB_PATH = os.path.join(DB_DIR, "anvalyx.db")
 
 def get_connection():
-    # Ensure directory exists
     os.makedirs(DB_DIR, exist_ok=True)
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -26,3 +25,29 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+def get_all_jobs():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, title, company, location, url
+        FROM jobs
+        ORDER BY id DESC
+        LIMIT 50
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    jobs = []
+    for row in rows:
+        jobs.append({
+            "id": row[0],
+            "title": row[1],
+            "company": row[2],
+            "location": row[3],
+            "url": row[4],
+        })
+
+    return jobs
