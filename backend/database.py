@@ -1,57 +1,67 @@
-import sqlite3
 import os
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-DB_PATH = "/tmp/anvalyx.db"
+# Render provides DATABASE_URL automatically
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-def get_connection():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+# Fix for Render Postgres URL format
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+Base = declarative_base()
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    company = Column(String, nullable=False)
+    location = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+
 
 def init_db():
-    conn = get_connection()
-    cursor = conn.cursor()
+    Base.metadata.create_all(bind=engine)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS jobs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT,
-            company TEXT,
-            location TEXT,
-            url TEXT
-        )
-    """)
 
-    cursor.execute("SELECT COUNT(*) FROM jobs")
-    count = cursor.fetchone()[0]
+def seed_data():
+    db = SessionLocal()
 
-    if count == 0:
-        cursor.executemany("""
-            INSERT INTO jobs (title, company, location, url)
-            VALUES (?, ?, ?, ?)
-        """, [
-            ("Data Analyst", "Google", "USA", "https://careers.google.com"),
-            ("Business Analyst", "Amazon", "USA", "https://amazon.jobs"),
-            ("BI Analyst", "Microsoft", "USA", "https://careers.microsoft.com"),
-            ("Analytics Engineer", "Meta", "USA", "https://www.metacareers.com"),
-            ("Product Analyst", "Netflix", "USA", "https://jobs.netflix.com"),
-        ])
+    # Avoid duplicate seeding
+    if db.query(Job).first():
+        db.close()
+        return
 
-    conn.commit()
-    conn.close()
+    jobs = [
+        Job(title="Data Analyst", company="Google", location="USA", url="https://careers.google.com"),
+        Job(title="Business Analyst", company="Amazon", location="USA", url="https://amazon.jobs"),
+        Job(title="BI Analyst", company="Microsoft", location="USA", url="https://careers.microsoft.com"),
+        Job(title="Analytics Engineer", company="Meta", location="USA", url="https://www.metacareers.com"),
+        Job(title="Product Analyst", company="Netflix", location="USA", url="https://jobs.netflix.com"),
+    ]
+
+    db.add_all(jobs)
+    db.commit()
+    db.close()
+
 
 def get_all_jobs():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, title, company, location, url FROM jobs")
-    rows = cursor.fetchall()
-    conn.close()
-
-    return [
+    db = SessionLocal()
+    jobs = db.query(Job).all()
+    result = [
         {
-            "id": r[0],
-            "title": r[1],
-            "company": r[2],
-            "location": r[3],
-            "url": r[4],
+            "id": job.id,
+            "title": job.title,
+            "company": job.company,
+            "location": job.location,
+            "url": job.url,
         }
-        for r in rows
+        for job in jobs
     ]
+    db.close()
+    return result
