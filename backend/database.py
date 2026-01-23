@@ -51,3 +51,18 @@ def get_all_jobs():
         })
 
     return jobs
+    
+def insert_sample_jobs():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO jobs (title, company, location, url)
+        VALUES
+        ('Data Analyst', 'Google', 'United States', 'https://careers.google.com'),
+        ('Business Analyst', 'Amazon', 'United States', 'https://amazon.jobs'),
+        ('Analytics Engineer', 'Meta', 'United States', 'https://www.metacareers.com')
+    """)
+
+    conn.commit()
+    conn.close()
