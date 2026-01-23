@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from backend.database import init_db, seed_data, get_all_jobs
+from database import init_db, seed_data, get_all_jobs
 
 app = FastAPI(title="Anvalyx API")
 
