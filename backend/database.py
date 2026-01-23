@@ -2,7 +2,7 @@ import sqlite3
 import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "..", "database", "anvalyx.db")
+DB_PATH = os.path.join("/tmp",BASE_DIR, "..", "database", "anvalyx.db")
 
 def get_connection():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -24,7 +24,7 @@ def init_db():
     url TEXT,
     source TEXT,
     created TEXT
-);
+)
     """)
 
     conn.commit()
