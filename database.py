@@ -1,86 +1,97 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import os
 
+# -------------------------------------------------------------------
+# Database URL
+# -------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# If running locally and DATABASE_URL is not set,
+# fall back to SQLite
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL is not set")
+    DATABASE_URL = "sqlite:///./jobs.db"
+
+# Fix for Render Postgres URLs
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
+
 Base = declarative_base()
 
-
+# -------------------------------------------------------------------
+# Job Model
+# -------------------------------------------------------------------
 class Job(Base):
     __tablename__ = "jobs"
 
-    id = Column(Integer, primary_key=True)
-    external_id = Column(String, nullable=False)
-    title = Column(String, nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    external_id = Column(String, index=True)
+    title = Column(String)
     company = Column(String)
     location = Column(String)
-    url = Column(Text)
-    source = Column(String, nullable=False)
-    posted_at = Column(DateTime)
+    url = Column(String)
+    source = Column(String)
+    posted_at = Column(DateTime, default=datetime.utcnow)
 
-    __table_args__ = (
-        UniqueConstraint("external_id", "source", name="uix_external_source"),
-    )
+# -------------------------------------------------------------------
+# TEMPORARY: Recreate tables (safe for now)
+# -------------------------------------------------------------------
+Base.metadata.drop_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 
-
-def init_db():
-    Base.metadata.create_all(bind=engine)
-
-
-def save_jobs(jobs: list[dict]):
+# -------------------------------------------------------------------
+# DB Helpers
+# -------------------------------------------------------------------
+def save_jobs(jobs):
     db = SessionLocal()
-
-    for job in jobs:
-        exists = (
-            db.query(Job)
-            .filter(
-                Job.external_id == str(job["external_id"]),
-                Job.source == job["source"],
+    try:
+        for job in jobs:
+            existing = (
+                db.query(Job)
+                .filter(
+                    Job.external_id == job["external_id"],
+                    Job.source == job["source"],
+                )
+                .first()
             )
-            .first()
-        )
 
-        if exists:
-            continue
+            if not existing:
+                db_job = Job(
+                    external_id=job["external_id"],
+                    title=job["title"],
+                    company=job["company"],
+                    location=job["location"],
+                    url=job["url"],
+                    source=job["source"],
+                    posted_at=job["posted_at"],
+                )
+                db.add(db_job)
 
-        db.add(
-            Job(
-                external_id=str(job["external_id"]),
-                title=job["title"],
-                company=job.get("company"),
-                location=job.get("location"),
-                url=job.get("url"),
-                source=job["source"],
-                posted_at=job.get("posted_at"),
-            )
-        )
-
-    db.commit()
-    db.close()
+        db.commit()
+    finally:
+        db.close()
 
 
 def get_all_jobs():
     db = SessionLocal()
-    jobs = db.query(Job).order_by(Job.posted_at.desc()).all()
-    db.close()
-
-    return [
-        {
-            "id": j.id,
-            "external_id": j.external_id,
-            "title": j.title,
-            "company": j.company,
-            "location": j.location,
-            "url": j.url,
-            "source": j.source,
-            "posted_at": j.posted_at,
-        }
-        for j in jobs
-    ]
+    try:
+        jobs = db.query(Job).order_by(Job.posted_at.desc()).all()
+        return [
+            {
+                "id": j.id,
+                "external_id": j.external_id,
+                "title": j.title,
+                "company": j.company,
+                "location": j.location,
+                "url": j.url,
+                "source": j.source,
+                "posted_at": j.posted_at,
+            }
+            for j in jobs
+        ]
+    finally:
+        db.close()
