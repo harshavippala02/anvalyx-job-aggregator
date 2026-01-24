@@ -7,6 +7,7 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Fix Render postgres:// issue
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -23,11 +24,10 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(Integer, primary_key=True, index=True)
-    title = Column(String(255))
-    company = Column(String(255))
-    location = Column(String(255))
-    url = Column(Text)
-    source = Column(String(50))
+    title = Column(String(255), nullable=False)
+    company = Column(String(255), nullable=False)
+    location = Column(String(255), nullable=False)
+    url = Column(Text, nullable=False)
 
 
 def init_db():
@@ -45,6 +45,7 @@ def save_jobs(jobs: list[dict]):
 
             if not exists:
                 db.add(Job(**job))
+
         db.commit()
     finally:
         db.close()
@@ -61,10 +62,10 @@ def get_all_jobs():
                 "company": r.company,
                 "location": r.location,
                 "url": r.url,
-                "source": r.source,
             }
             for r in rows
         ]
     finally:
         db.close()
+
 
