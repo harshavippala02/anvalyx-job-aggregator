@@ -2,7 +2,7 @@ import os
 import requests
 from fastapi import FastAPI
 from dotenv import load_dotenv
-from .database import init_db, save_jobs, get_all_jobs
+from database import init_db, save_jobs, get_all_jobs
 
 load_dotenv()
 
