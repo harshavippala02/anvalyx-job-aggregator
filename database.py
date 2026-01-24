@@ -68,7 +68,7 @@ def save_jobs(jobs: list[dict]):
             exists = (
                 db.query(Job)
                 .filter(
-                    Job.external_id == job["external_id"],
+                    Job.external_id == str(job["external_id"])
                     Job.source == job["source"],
                 )
                 .first()
