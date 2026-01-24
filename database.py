@@ -8,12 +8,11 @@ import os
 # -------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# If running locally and DATABASE_URL is not set,
-# fall back to SQLite
+# Local fallback
 if not DATABASE_URL:
     DATABASE_URL = "sqlite:///./jobs.db"
 
-# Fix for Render Postgres URLs
+# Fix Render Postgres URL
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -38,10 +37,11 @@ class Job(Base):
     posted_at = Column(DateTime, default=datetime.utcnow)
 
 # -------------------------------------------------------------------
-# TEMPORARY: Recreate tables (safe for now)
+# Init DB (CALLED ON STARTUP)
 # -------------------------------------------------------------------
-Base.metadata.drop_all(bind=engine)
-Base.metadata.create_all(bind=engine)
+def init_db():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
 # -------------------------------------------------------------------
 # DB Helpers
