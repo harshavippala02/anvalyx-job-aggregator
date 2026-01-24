@@ -1,7 +1,16 @@
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
+from pydantic import BaseModel
 
-from database import init_db, save_jobs, SessionLocal, Job
+from database import (
+    init_db,
+    save_jobs,
+    save_resume,
+    get_active_resume,
+    SessionLocal,
+    Job
+)
+
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
 from sqlalchemy.orm import Session
@@ -9,7 +18,7 @@ from sqlalchemy.orm import Session
 app = FastAPI()
 
 # -----------------------------
-# Scheduler setup
+# Scheduler
 # -----------------------------
 scheduler = BackgroundScheduler()
 
@@ -24,43 +33,67 @@ def refresh_jobs():
     save_jobs(usajobs)
     print(f"✅ Saved {len(usajobs)} USAJobs jobs")
 
-
-# Run every 10 minutes
 scheduler.add_job(refresh_jobs, "interval", minutes=10)
 
-
 # -----------------------------
-# Startup event
+# Startup
 # -----------------------------
 @app.on_event("startup")
 def startup_event():
     init_db()
-    refresh_jobs()   # run once on startup
+    refresh_jobs()
     scheduler.start()
     print("⏱️ Scheduler started (10-minute interval)")
 
-
 # -----------------------------
-# API Routes
+# Health
 # -----------------------------
 @app.get("/")
-def health_check():
+def health():
     return {"status": "Anvalyx backend running"}
 
-
+# -----------------------------
+# Jobs API
+# -----------------------------
 @app.get("/jobs")
 def get_jobs():
     db: Session = SessionLocal()
     jobs = db.query(Job).order_by(Job.posted_at.desc()).all()
+    db.close()
 
     return [
         {
-            "title": job.title,
-            "company": job.company,
-            "location": job.location,
-            "url": job.url,
-            "source": job.source,
-            "posted_at": job.posted_at
+            "title": j.title,
+            "company": j.company,
+            "location": j.location,
+            "url": j.url,
+            "source": j.source,
+            "posted_at": j.posted_at
         }
-        for job in jobs
+        for j in jobs
     ]
+
+# -----------------------------
+# Resume API (NEW)
+# -----------------------------
+class ResumeRequest(BaseModel):
+    resume_text: str
+
+@app.post("/resume")
+def upload_resume(payload: ResumeRequest):
+    resume = save_resume(payload.resume_text)
+    return {
+        "message": "Resume saved successfully",
+        "resume_id": resume.id
+    }
+
+@app.get("/resume")
+def fetch_resume():
+    resume = get_active_resume()
+    if not resume:
+        return {"message": "No resume found"}
+
+    return {
+        "resume_text": resume.resume_text,
+        "updated_at": resume.updated_at
+    }

@@ -1,29 +1,27 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    String,
+    Text,
+    DateTime,
+    Boolean
+)
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import os
 
-# -------------------------------------------------------------------
-# Database URL
-# -------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Local fallback
-if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///./jobs.db"
-
-# Fix Render Postgres URL
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
 engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
-# -------------------------------------------------------------------
-# Job Model
-# -------------------------------------------------------------------
+# -----------------------------
+# Job table
+# -----------------------------
 class Job(Base):
     __tablename__ = "jobs"
 
@@ -36,61 +34,65 @@ class Job(Base):
     source = Column(String)
     posted_at = Column(DateTime, default=datetime.utcnow)
 
-# -------------------------------------------------------------------
-# Init DB (CALLED ON STARTUP)
-# -------------------------------------------------------------------
+# -----------------------------
+# Resume table (NEW)
+# -----------------------------
+class UserResume(Base):
+    __tablename__ = "user_resume"
+
+    id = Column(Integer, primary_key=True, index=True)
+    resume_text = Column(Text, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+# -----------------------------
+# DB init
+# -----------------------------
 def init_db():
     Base.metadata.create_all(bind=engine)
 
-# -------------------------------------------------------------------
-# DB Helpers
-# -------------------------------------------------------------------
+# -----------------------------
+# Job helpers
+# -----------------------------
 def save_jobs(jobs):
     db = SessionLocal()
-    try:
-        for job in jobs:
-            existing = (
-                db.query(Job)
-                .filter(
-                    Job.external_id == job["external_id"],
-                    Job.source == job["source"],
-                )
-                .first()
-            )
 
-            if not existing:
-                db_job = Job(
-                    external_id=job["external_id"],
-                    title=job["title"],
-                    company=job["company"],
-                    location=job["location"],
-                    url=job["url"],
-                    source=job["source"],
-                    posted_at=job["posted_at"],
-                )
-                db.add(db_job)
+    for job in jobs:
+        exists = db.query(Job).filter(
+            Job.external_id == job["external_id"],
+            Job.source == job["source"]
+        ).first()
 
-        db.commit()
-    finally:
-        db.close()
+        if not exists:
+            db.add(Job(**job))
 
+    db.commit()
+    db.close()
 
-def get_all_jobs():
+# -----------------------------
+# Resume helpers
+# -----------------------------
+def save_resume(resume_text: str):
     db = SessionLocal()
-    try:
-        jobs = db.query(Job).order_by(Job.posted_at.desc()).all()
-        return [
-            {
-                "id": j.id,
-                "external_id": j.external_id,
-                "title": j.title,
-                "company": j.company,
-                "location": j.location,
-                "url": j.url,
-                "source": j.source,
-                "posted_at": j.posted_at,
-            }
-            for j in jobs
-        ]
-    finally:
-        db.close()
+
+    # Deactivate old resumes
+    db.query(UserResume).update({UserResume.is_active: False})
+
+    resume = UserResume(
+        resume_text=resume_text,
+        is_active=True
+    )
+
+    db.add(resume)
+    db.commit()
+    db.refresh(resume)
+    db.close()
+    return resume
+
+
+def get_active_resume():
+    db = SessionLocal()
+    resume = db.query(UserResume).filter(UserResume.is_active == True).first()
+    db.close()
+    return resume
