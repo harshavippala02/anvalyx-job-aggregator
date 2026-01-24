@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .env
 database/*.db
+jobs.db
+db_store/

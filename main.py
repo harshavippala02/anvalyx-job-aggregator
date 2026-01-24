@@ -1,37 +1,46 @@
 from fastapi import FastAPI
+from apscheduler.schedulers.background import BackgroundScheduler
+
 from database import init_db, save_jobs, get_all_jobs
 from adzuna_client import fetch_adzuna_jobs
 
 app = FastAPI()
 
+# ----------------------------
+# Scheduler setup
+# ----------------------------
+scheduler = BackgroundScheduler()
+
+def refresh_jobs():
+    print("🔄 Refreshing jobs from Adzuna...")
+    jobs = fetch_adzuna_jobs()
+    save_jobs(jobs)
+    print(f"✅ Saved {len(jobs)} jobs")
+
+# Run every 10 minutes
+scheduler.add_job(refresh_jobs, "interval", minutes=10)
 
 @app.on_event("startup")
-def startup():
+def startup_event():
     init_db()
 
-    jobs = fetch_adzuna_jobs()
+    # Run once immediately on startup
+    refresh_jobs()
 
-    # 🔒 Normalize jobs (CRITICAL FIX)
-    normalized = []
-    for j in jobs:
-        normalized.append({
-            "external_id": j.get("external_id") or j.get("id"),
-            "title": j["title"],
-            "company": j["company"],
-            "location": j["location"],
-            "url": j["url"],
-            "source": j.get("source", "adzuna"),
-            "posted_at": j.get("posted_at"),
-        })
+    # Start scheduler
+    scheduler.start()
 
-    save_jobs(normalized)
+@app.on_event("shutdown")
+def shutdown_event():
+    scheduler.shutdown()
 
-
+# ----------------------------
+# API routes
+# ----------------------------
 @app.get("/")
-def root():
+def health():
     return {"status": "Anvalyx backend is running"}
 
-
 @app.get("/jobs")
-def list_jobs():
+def get_jobs():
     return get_all_jobs()
