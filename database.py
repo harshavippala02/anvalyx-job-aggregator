@@ -12,15 +12,22 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import os
 
+# -----------------------------
+# Database connection
+# -----------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
 
 Base = declarative_base()
 
 # -----------------------------
-# Job table
+# Jobs table
 # -----------------------------
 class Job(Base):
     __tablename__ = "jobs"
@@ -35,7 +42,7 @@ class Job(Base):
     posted_at = Column(DateTime, default=datetime.utcnow)
 
 # -----------------------------
-# Resume table (NEW)
+# Resume table (single active resume)
 # -----------------------------
 class UserResume(Base):
     __tablename__ = "user_resume"
@@ -44,10 +51,14 @@ class UserResume(Base):
     resume_text = Column(Text, nullable=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow
+    )
 
 # -----------------------------
-# DB init
+# DB initialization
 # -----------------------------
 def init_db():
     Base.metadata.create_all(bind=engine)
@@ -70,13 +81,23 @@ def save_jobs(jobs):
     db.commit()
     db.close()
 
+def get_all_jobs():
+    db = SessionLocal()
+    jobs = db.query(Job).order_by(Job.posted_at.desc()).all()
+    db.close()
+    return jobs
+
 # -----------------------------
 # Resume helpers
 # -----------------------------
 def save_resume(resume_text: str):
+    """
+    Saves a new resume and deactivates old ones.
+    Only ONE resume is active at any time.
+    """
     db = SessionLocal()
 
-    # Deactivate old resumes
+    # Deactivate previous resumes
     db.query(UserResume).update({UserResume.is_active: False})
 
     resume = UserResume(
@@ -88,11 +109,19 @@ def save_resume(resume_text: str):
     db.commit()
     db.refresh(resume)
     db.close()
+
     return resume
 
 
 def get_active_resume():
+    """
+    Returns the currently active resume.
+    """
     db = SessionLocal()
-    resume = db.query(UserResume).filter(UserResume.is_active == True).first()
+    resume = (
+        db.query(UserResume)
+        .filter(UserResume.is_active == True)
+        .first()
+    )
     db.close()
     return resume

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from database import (
     init_db,
@@ -13,7 +14,8 @@ from database import (
 
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
-from sqlalchemy.orm import Session
+
+from ats_engine import calculate_ats  # NEW
 
 app = FastAPI()
 
@@ -63,6 +65,7 @@ def get_jobs():
 
     return [
         {
+            "id": j.id,
             "title": j.title,
             "company": j.company,
             "location": j.location,
@@ -74,7 +77,7 @@ def get_jobs():
     ]
 
 # -----------------------------
-# Resume API (NEW)
+# Resume API
 # -----------------------------
 class ResumeRequest(BaseModel):
     resume_text: str
@@ -97,3 +100,51 @@ def fetch_resume():
         "resume_text": resume.resume_text,
         "updated_at": resume.updated_at
     }
+
+# -----------------------------
+# ATS API (NEW)
+# -----------------------------
+class ATSRequest(BaseModel):
+    job_description: str
+
+@app.post("/ats/score")
+def ats_score(payload: ATSRequest):
+    resume = get_active_resume()
+
+    if not resume:
+        return {"error": "No resume found. Upload resume first."}
+
+    result = calculate_ats(
+        resume.resume_text,
+        payload.job_description
+    )
+
+    return result
+
+@app.get("/ats/score/job/{job_id}")
+def ats_score_for_job(job_id: int):
+    db: Session = SessionLocal()
+    job = db.query(Job).filter(Job.id == job_id).first()
+    db.close()
+
+    if not job:
+        return {"error": "Job not found"}
+
+    resume = get_active_resume()
+    if not resume:
+        return {"error": "No resume found. Upload resume first."}
+
+    # Build JD text from job fields
+    job_text = f"""
+    {job.title}
+    {job.company}
+    {job.location}
+    {job.source}
+    """
+
+    result = calculate_ats(
+        resume.resume_text,
+        job_text
+    )
+
+    return result
