@@ -3,7 +3,7 @@ import requests
 
 st.set_page_config(page_title="Anvalyx – Job Aggregator", layout="wide")
 
-BACKEND_URL = "https://anvalyx-backend.onrender.com/jobs"
+BACKEND_URL = "https://anvalyx-backend.onrender.com"
 
 @st.cache_data(ttl=60)
 def fetch_jobs():
