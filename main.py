@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from database import init_db, save_jobs, get_all_jobs
+from database import init_db, save_jobs
 from adzuna_client import fetch_adzuna_jobs
+from usajobs_client import fetch_usajobs
 
 app = FastAPI()
 
@@ -13,34 +14,28 @@ scheduler = BackgroundScheduler()
 
 def refresh_jobs():
     print("🔄 Refreshing jobs from Adzuna...")
-    jobs = fetch_adzuna_jobs()
-    save_jobs(jobs)
-    print(f"✅ Saved {len(jobs)} jobs")
+    adzuna_jobs = fetch_adzuna_jobs()
+    save_jobs(adzuna_jobs)
+    print(f"✅ Saved {len(adzuna_jobs)} Adzuna jobs")
+
+    print("🔄 Refreshing jobs from USAJobs...")
+    usajobs = fetch_usajobs()
+    save_jobs(usajobs)
+    print(f"✅ Saved {len(usajobs)} USAJobs jobs")
 
 # Run every 10 minutes
 scheduler.add_job(refresh_jobs, "interval", minutes=10)
 
+# ----------------------------
+# Startup event
+# ----------------------------
 @app.on_event("startup")
 def startup_event():
     init_db()
 
-    # Run once immediately on startup
+    # Run once immediately
     refresh_jobs()
 
     # Start scheduler
     scheduler.start()
-
-@app.on_event("shutdown")
-def shutdown_event():
-    scheduler.shutdown()
-
-# ----------------------------
-# API routes
-# ----------------------------
-@app.get("/")
-def health():
-    return {"status": "Anvalyx backend is running"}
-
-@app.get("/jobs")
-def get_jobs():
-    return get_all_jobs()
+    print("⏱️ Scheduler started (10-minute interval)")
