@@ -1,26 +1,27 @@
 import streamlit as st
 import requests
 
+st.set_page_config(page_title="Anvalyx – Job Aggregator", layout="wide")
+
 BACKEND_URL = "https://anvalyx-backend.onrender.com/jobs"
 
-st.set_page_config(
-    page_title="Anvalyx – Job Aggregator",
-    layout="wide"
-)
+@st.cache_data(ttl=60)
+def fetch_jobs():
+    response = requests.get(
+        BACKEND_URL,
+        timeout=30  # ⬅️ very important for Render
+    )
+    response.raise_for_status()
+    return response.json()
 
 st.title("💼 Anvalyx – Job Aggregator")
 st.caption("Live jobs from multiple sources (backend-powered)")
-
-@st.cache_data(ttl=300)
-def fetch_jobs():
-    response = requests.get(BACKEND_URL, timeout=30)
-    response.raise_for_status()
-    return response.json()
 
 try:
     jobs = fetch_jobs()
 except Exception as e:
     st.error("Failed to fetch jobs from backend")
+    st.code(str(e))
     st.stop()
 
 st.subheader(f"🔎 Showing {len(jobs)} jobs")
