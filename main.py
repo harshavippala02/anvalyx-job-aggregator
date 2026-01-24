@@ -15,7 +15,7 @@ from database import (
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
 
-from ats_engine import calculate_ats  # NEW
+from ats_engine import calculate_ats
 
 app = FastAPI()
 
@@ -102,27 +102,32 @@ def fetch_resume():
     }
 
 # -----------------------------
-# ATS API (NEW)
+# ATS APIs
 # -----------------------------
 class ATSRequest(BaseModel):
     job_description: str
 
 @app.post("/ats/score")
-def ats_score(payload: ATSRequest):
+def ats_score_manual(payload: ATSRequest):
+    """
+    ATS score for pasted job descriptions
+    (manual ATS checker tab)
+    """
     resume = get_active_resume()
-
     if not resume:
         return {"error": "No resume found. Upload resume first."}
 
-    result = calculate_ats(
+    return calculate_ats(
         resume.resume_text,
         payload.job_description
     )
 
-    return result
-
 @app.get("/ats/score/job/{job_id}")
 def ats_score_for_job(job_id: int):
+    """
+    ATS score for a job inside Anvalyx
+    (per-job ATS)
+    """
     db: Session = SessionLocal()
     job = db.query(Job).filter(Job.id == job_id).first()
     db.close()
@@ -134,7 +139,7 @@ def ats_score_for_job(job_id: int):
     if not resume:
         return {"error": "No resume found. Upload resume first."}
 
-    # Build JD text from job fields
+    # Build job text (can be expanded later)
     job_text = f"""
     {job.title}
     {job.company}
@@ -142,9 +147,7 @@ def ats_score_for_job(job_id: int):
     {job.source}
     """
 
-    result = calculate_ats(
+    return calculate_ats(
         resume.resume_text,
         job_text
     )
-
-    return result
