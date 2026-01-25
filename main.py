@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
+
 # --------------------------------------------------
 # ENV
 # --------------------------------------------------
@@ -26,6 +27,7 @@ from database import (
 
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
+from backend.jobs.greenhouse_client import fetch_greenhouse_jobs
 
 # 👉 IMPORT ATS ROUTER (IMPORTANT)
 from backend.ats.ats import router as ats_router
@@ -51,12 +53,15 @@ def refresh_jobs():
         usajobs = fetch_usajobs()
         save_jobs(usajobs)
 
+        greenhouse_jobs = fetch_greenhouse_jobs()
+        save_jobs(greenhouse_jobs)
+
         print("✅ Jobs refreshed successfully")
 
     except Exception as e:
         print("❌ Job refresh failed:", e)
 
-scheduler.add_job(refresh_jobs, "interval", minutes=10)
+scheduler.add_job(refresh_jobs, "interval", hours=1)
 
 # --------------------------------------------------
 # Startup
