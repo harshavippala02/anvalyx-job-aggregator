@@ -25,6 +25,22 @@ def get_latest_resume_text(db: Session) -> Optional[str]:
     )
     return resume.resume_text if resume else None
 
+
+def build_job_text(job: Job) -> str:
+    """
+    Build ATS-readable job text from available job fields.
+    (Job model does NOT have a description column)
+    """
+    parts = [
+        job.title or "",
+        job.company or "",
+        job.location or "",
+        job.source or "",
+        job.url or ""
+    ]
+    text = "\n".join(p for p in parts if p.strip())
+    return text.strip()
+
 # ---------------- ROUTES ----------------
 
 @router.post("/score")
@@ -32,7 +48,6 @@ def score_manual_job(payload: ATSRequest):
     db = next(get_db())
     try:
         resume_text = get_latest_resume_text(db)
-
         if not resume_text:
             raise HTTPException(
                 status_code=400,
@@ -45,11 +60,8 @@ def score_manual_job(payload: ATSRequest):
                 job_text=payload.job_description
             )
         except Exception as e:
-            print("❌ ATS CALCULATION ERROR (manual):", str(e))
-            raise HTTPException(
-                status_code=500,
-                detail=str(e)
-            )
+            print("❌ ATS ERROR (manual):", str(e))
+            raise HTTPException(status_code=500, detail=str(e))
 
         return {
             "score": result["ats_score"],
@@ -59,7 +71,6 @@ def score_manual_job(payload: ATSRequest):
             "interpretation": result["interpretation"],
             "breakdown": result["breakdown"]
         }
-
     finally:
         db.close()
 
@@ -79,23 +90,21 @@ def score_job(job_id: int):
                 detail="No resume found. Please upload a resume first."
             )
 
-        if not job.description or not job.description.strip():
+        job_text = build_job_text(job)
+        if not job_text:
             raise HTTPException(
                 status_code=400,
-                detail="Job description is empty. ATS score cannot be calculated."
+                detail="Insufficient job data to calculate ATS score."
             )
 
         try:
             result = calculate_ats_score(
                 resume_text=resume_text,
-                job_text=job.description
+                job_text=job_text
             )
         except Exception as e:
-            print("❌ ATS CALCULATION ERROR (job):", str(e))
-            raise HTTPException(
-                status_code=500,
-                detail=str(e)
-            )
+            print("❌ ATS ERROR (job):", str(e))
+            raise HTTPException(status_code=500, detail=str(e))
 
         return {
             "score": result["ats_score"],
@@ -105,6 +114,5 @@ def score_job(job_id: int):
             "interpretation": result["interpretation"],
             "breakdown": result["breakdown"]
         }
-
     finally:
         db.close()
