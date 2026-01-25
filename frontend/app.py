@@ -24,21 +24,31 @@ def fetch_jobs():
         res = requests.get(f"{BACKEND_BASE}/jobs", timeout=20)
         if res.status_code == 200:
             return res.json()
-    except:
+    except Exception:
         pass
     return []
 
-def days_ago(date_str):
+def parse_posted_date(posted_at):
+    """
+    Safely parse posted_at → returns (label, age_in_days)
+    """
+    if not posted_at:
+        return "Unknown", 999
+
     try:
-        posted = datetime.fromisoformat(date_str.replace("Z", "")).replace(tzinfo=timezone.utc)
-        diff = (datetime.now(timezone.utc) - posted).days
-        if diff == 0:
-            return "Today"
-        if diff == 1:
-            return "1 day ago"
-        return f"{diff} days ago"
-    except:
-        return "Unknown"
+        posted = datetime.fromisoformat(
+            posted_at.replace("Z", "")
+        ).replace(tzinfo=timezone.utc)
+
+        days = (datetime.now(timezone.utc) - posted).days
+
+        if days == 0:
+            return "Today", 0
+        if days == 1:
+            return "1 day ago", 1
+        return f"{days} days ago", days
+    except Exception:
+        return "Unknown", 999
 
 def render_jobs(job_list, section):
     if not job_list:
@@ -46,60 +56,65 @@ def render_jobs(job_list, section):
         return
 
     for job in job_list:
-        st.markdown(f"## {job['title']}")
-        st.write(f"**Company:** {job['company']}")
-        st.write(f"**Location:** {job['location']}")
-        st.write(f"**Source:** {job['source']}")
-        st.write(f"**Posted:** {days_ago(job['posted_at'])}")
+        st.markdown(f"## {job.get('title', 'N/A')}")
+        st.write(f"**Company:** {job.get('company', 'N/A')}")
+        st.write(f"**Location:** {job.get('location', 'N/A')}")
+        st.write(f"**Source:** {job.get('source', 'N/A')}")
 
-        st.markdown(f"[Apply Here]({job['url']})")
+        posted_label, _ = parse_posted_date(job.get("posted_at"))
+        st.write(f"**Posted:** {posted_label}")
+
+        if job.get("url"):
+            st.markdown(f"[Apply Here]({job['url']})")
 
         # ---------- ATS BUTTON ----------
         if st.button(
             "📊 Check AI ATS Score",
-            key=f"ats_{section}_{job['id']}"
+            key=f"ats_{section}_{job.get('id', job.get('url'))}"
         ):
             with st.spinner("Calculating ATS score..."):
-                res = requests.get(
-                    f"{BACKEND_BASE}/ats/score/job/{job['id']}",
-                    timeout=30
-                )
+                try:
+                    res = requests.get(
+                        f"{BACKEND_BASE}/ats/score/job/{job['id']}",
+                        timeout=30
+                    )
 
-                if res.status_code == 200:
-                    data = res.json()
+                    if res.status_code == 200:
+                        data = res.json()
 
-                    st.success(f"🎯 ATS Match Score: {data['score']}%")
+                        st.success(f"🎯 ATS Match Score: {data.get('score', 0)}%")
 
-                    if data.get("strengths"):
-                        st.markdown("### ✅ Strengths")
-                        st.write(", ".join(data["strengths"]))
+                        if data.get("strengths"):
+                            st.markdown("### ✅ Strengths")
+                            st.write(", ".join(data["strengths"]))
 
-                    if data.get("gaps"):
-                        st.markdown("### ❌ Skill Gaps")
-                        st.write(", ".join(data["gaps"]))
+                        if data.get("gaps"):
+                            st.markdown("### ❌ Skill Gaps")
+                            st.write(", ".join(data["gaps"]))
 
-                    if data.get("explanation"):
-                        st.caption(data["explanation"])
+                        if data.get("explanation"):
+                            st.caption(data["explanation"])
+                    else:
+                        st.error("Failed to calculate ATS score")
 
-                else:
-                    st.error("Failed to calculate ATS score")
+                except Exception:
+                    st.error("ATS service error")
 
         st.divider()
 
-# ---------------- LOAD JOBS ----------------
+# ---------------- LOAD & SPLIT JOBS ----------------
 all_jobs = fetch_jobs()
-now = datetime.now(timezone.utc)
 
 fresh_jobs = []
 older_jobs = []
 
-for j in all_jobs:
-    posted = datetime.fromisoformat(j["posted_at"].replace("Z", "")).replace(tzinfo=timezone.utc)
-    age = (now - posted).days
+for job in all_jobs:
+    _, age = parse_posted_date(job.get("posted_at"))
+
     if age <= 7:
-        fresh_jobs.append(j)
+        fresh_jobs.append(job)
     elif 8 <= age <= 30:
-        older_jobs.append(j)
+        older_jobs.append(job)
 
 # ---------------- TABS ----------------
 tab1, tab2, tab3 = st.tabs([
@@ -130,29 +145,30 @@ with tab3:
             st.warning("Please paste both job description and resume")
         else:
             with st.spinner("Calculating ATS score..."):
-                res = requests.post(
-                    f"{BACKEND_BASE}/ats/score",
-                    json={
-                        "job_description": job_text
-                    },
-                    timeout=30
-                )
+                try:
+                    res = requests.post(
+                        f"{BACKEND_BASE}/ats/score",
+                        json={"job_description": job_text},
+                        timeout=30
+                    )
 
-                if res.status_code == 200:
-                    data = res.json()
+                    if res.status_code == 200:
+                        data = res.json()
 
-                    st.success(f"🎯 ATS Match Score: {data['score']}%")
+                        st.success(f"🎯 ATS Match Score: {data.get('score', 0)}%")
 
-                    if data.get("strengths"):
-                        st.markdown("### ✅ Strengths")
-                        st.write(", ".join(data["strengths"]))
+                        if data.get("strengths"):
+                            st.markdown("### ✅ Strengths")
+                            st.write(", ".join(data["strengths"]))
 
-                    if data.get("gaps"):
-                        st.markdown("### ❌ Skill Gaps")
-                        st.write(", ".join(data["gaps"]))
+                        if data.get("gaps"):
+                            st.markdown("### ❌ Skill Gaps")
+                            st.write(", ".join(data["gaps"]))
 
-                    if data.get("explanation"):
-                        st.caption(data["explanation"])
+                        if data.get("explanation"):
+                            st.caption(data["explanation"])
+                    else:
+                        st.error("Failed to calculate ATS score")
 
-                else:
-                    st.error("Failed to calculate ATS score")
+                except Exception:
+                    st.error("ATS service error")
