@@ -115,7 +115,6 @@ def save_resume(resume_text: str):
 
     return resume
 
-
 def get_active_resume():
     """
     Returns the currently active resume.
@@ -128,3 +127,16 @@ def get_active_resume():
     )
     db.close()
     return resume
+
+# -----------------------------
+# ✅ FastAPI DB dependency (MISSING PART)
+# -----------------------------
+def get_db():
+    """
+    Yields a database session for FastAPI routes
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
