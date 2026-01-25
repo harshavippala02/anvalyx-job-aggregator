@@ -1,230 +1,139 @@
 import streamlit as st
 import requests
-from datetime import datetime, timezone
+import os
 
-# --------------------------------------------------
-# Config
-# --------------------------------------------------
-BACKEND_BASE = "https://anvalyx-backend.onrender.com"
-
-JOBS_API = f"{BACKEND_BASE}/jobs"
-RESUME_API = f"{BACKEND_BASE}/resume"
-ATS_JOB_API = f"{BACKEND_BASE}/ats/score/job"
-ATS_MANUAL_API = f"{BACKEND_BASE}/ats/score"
-
-JOBS_PER_PAGE = 10
+# ---------------- CONFIG ----------------
+BACKEND_BASE = os.getenv("BACKEND_BASE", "https://anvalyx-backend.onrender.com")
 
 st.set_page_config(
     page_title="Anvalyx – Job Aggregator",
     layout="wide"
 )
 
+# ---------------- HEADER ----------------
 st.title("💼 Anvalyx – Job Aggregator")
 st.caption("Jobs + AI ATS Match Checker")
 
-# --------------------------------------------------
-# Helpers
-# --------------------------------------------------
-def parse_date(date_str):
-    return datetime.fromisoformat(date_str.replace("Z", "")).replace(tzinfo=timezone.utc)
+# ---------------- HELPERS ----------------
+def fetch_jobs(endpoint):
+    try:
+        res = requests.get(f"{BACKEND_BASE}{endpoint}", timeout=20)
+        if res.status_code == 200:
+            return res.json()
+    except:
+        pass
+    return []
 
-def days_ago(posted_at):
-    now = datetime.now(timezone.utc)
-    diff = (now - posted_at).days
-    if diff == 0:
-        return "Today"
-    elif diff == 1:
-        return "1 day ago"
-    return f"{diff} days ago"
-
-@st.cache_data(ttl=300)
-def fetch_jobs():
-    res = requests.get(JOBS_API, timeout=20)
-    res.raise_for_status()
-    return res.json()
-
-@st.cache_data(ttl=300)
-def fetch_active_resume():
-    res = requests.get(RESUME_API, timeout=10)
-    if res.status_code == 200:
-        data = res.json()
-        if "resume_text" in data:
-            return data["resume_text"]
-    return None
-
-# --------------------------------------------------
-# Load resume once
-# --------------------------------------------------
-if "resume_text" not in st.session_state:
-    st.session_state.resume_text = fetch_active_resume()
-
-# Sidebar resume status
-st.sidebar.header("📄 Resume Status")
-if st.session_state.resume_text:
-    st.sidebar.success("Resume loaded from backend")
-else:
-    st.sidebar.warning("No resume stored yet")
-
-# --------------------------------------------------
-# Fetch & preprocess jobs
-# --------------------------------------------------
-raw_jobs = fetch_jobs()
-now = datetime.now(timezone.utc)
-
-jobs = []
-for j in raw_jobs:
-    posted_dt = parse_date(j["posted_at"])
-    age = (now - posted_dt).days
-    if age > 30:
-        continue
-
-    j["posted_dt"] = posted_dt
-    j["age"] = age
-    jobs.append(j)
-
-jobs.sort(key=lambda x: x["posted_dt"], reverse=True)
-
-# --------------------------------------------------
-# Pagination renderer
-# --------------------------------------------------
 def render_jobs(job_list, section):
-    total = len(job_list)
-    pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
+    if not job_list:
+        st.info("No jobs found")
+        return
 
-    page_key = f"page_{section}"
-    if page_key not in st.session_state:
-        st.session_state[page_key] = 1
+    for job in job_list:
+        st.markdown(f"## {job.get('title', 'N/A')}")
+        st.write(f"**Company:** {job.get('company', 'N/A')}")
+        st.write(f"**Location:** {job.get('location', 'N/A')}")
+        st.write(f"**Source:** {job.get('source', 'N/A')}")
+        st.write(f"**Posted:** {job.get('posted', 'N/A')}")
 
-    page = st.session_state[page_key]
-    start = (page - 1) * JOBS_PER_PAGE
-    end = start + JOBS_PER_PAGE
+        if job.get("apply_url"):
+            st.markdown(f"[Apply Here]({job['apply_url']})")
 
-    st.markdown(f"🔎 **Showing {total} jobs**")
-
-    for job in job_list[start:end]:
-        st.markdown(f"### {job['title']}")
-        st.markdown(f"**Company:** {job['company']}")
-        st.markdown(f"**Location:** {job['location']}")
-        st.markdown(f"**Source:** {job['source']}")
-        st.markdown(f"**Posted:** {days_ago(job['posted_dt'])}")
-        st.markdown(f"[Apply Here]({job['url']})")
-
-        # -----------------------------
-        # AI ATS score per job
-        # -----------------------------
-        if st.session_state.resume_text:
-            if st.button(
-                "📊 Check AI ATS Score",
-                key=f"ats_{section}_{job['id']}"
-            ):
-                with st.spinner("Calculating ATS score..."):
-                    res = requests.get(
-                        f"{ATS_JOB_API}/{job['id']}",
-                        timeout=20
-                    )
-                    if res.status_code == 200:
-                        data = res.json()
-                        st.success(f"🎯 ATS Match Score: {data['score']}%")
-                    if st.button("📊 Check AI ATS Score", key=f"ats_{section}_{job['external_id']}"):
-    res = requests.post(
-        f"{BACKEND_BASE}/ats/job",
-        json={"job_text": job_text},
-        timeout=30
-    )
-
-    if res.status_code == 200:
-        data = res.json()
-
-        st.success(f"🎯 ATS Match Score: {data['score']}%")
-
-        if "strengths" in data and data["strengths"]:
-            st.markdown("### ✅ Strengths")
-            st.write(", ".join(data["strengths"]))
-
-        if "gaps" in data and data["gaps"]:
-            st.markdown("### ❌ Skill Gaps")
-            st.write(", ".join(data["gaps"]))
-    else:
-        st.error("Failed to calculate ATS score")
-        st.divider()
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-
-    with col1:
+        # ---------- ATS BUTTON ----------
         if st.button(
-            "⬅️ Prev",
-            key=f"prev_{section}_{page}",
-            disabled=page == 1
+            "📊 Check AI ATS Score",
+            key=f"ats_{section}_{job.get('id', job.get('apply_url'))}"
         ):
-            st.session_state[page_key] -= 1
-            st.rerun()
-
-    with col3:
-        if st.button(
-            "Next ➡️",
-            key=f"next_{section}_{page}",
-            disabled=page == pages
-        ):
-            st.session_state[page_key] += 1
-            st.rerun()
-
-    with col2:
-        new_page = st.number_input(
-            "Page",
-            min_value=1,
-            max_value=pages,
-            value=page,
-            step=1,
-            key=f"page_input_{section}"
-        )
-        if new_page != page:
-            st.session_state[page_key] = new_page
-            st.rerun()
-
-# --------------------------------------------------
-# Tabs
-# --------------------------------------------------
-fresh_tab, older_tab, ats_tab = st.tabs([
-    "🟢 Fresh Jobs (≤7 days)",
-    "🟡 Older Jobs (8–30 days)",
-    "📄 ATS Checker (External Jobs)"
-])
-
-with fresh_tab:
-    fresh = [j for j in jobs if j["age"] <= 7]
-    render_jobs(fresh, "fresh")
-
-with older_tab:
-    older = [j for j in jobs if 8 <= j["age"] <= 30]
-    render_jobs(older, "older")
-
-# --------------------------------------------------
-# MANUAL ATS TAB (AI-BASED)
-# --------------------------------------------------
-with ats_tab:
-    st.subheader("📄 AI ATS Match Checker")
-    st.caption("Use this for jobs outside Anvalyx")
-
-    jd_text = st.text_area(
-        "🧾 Paste the Job Description",
-        height=300,
-        placeholder="Paste full job description here..."
-    )
-
-    if st.button("🔍 Check AI ATS Score"):
-        if not jd_text:
-            st.warning("Please paste a job description.")
-        else:
-            with st.spinner("Calculating ATS score..."):
+            try:
                 res = requests.post(
-                    ATS_MANUAL_API,
-                    json={"job_description": jd_text},
+                    f"{BACKEND_BASE}/ats/job",
+                    json={"job_id": job.get("id")},
                     timeout=30
                 )
 
                 if res.status_code == 200:
                     data = res.json()
-                    st.success(f"🎯 ATS Match Score: {data['score']}%")
-                    st.caption(data["explanation"])
+
+                    # SCORE
+                    score = data.get("score", 0)
+                    st.success(f"🎯 ATS Match Score: {score}%")
+
+                    # STRENGTHS
+                    strengths = data.get("strengths", [])
+                    if strengths:
+                        st.markdown("### ✅ Strengths")
+                        st.write(", ".join(strengths))
+
+                    # GAPS
+                    gaps = data.get("gaps", [])
+                    if gaps:
+                        st.markdown("### ❌ Skill Gaps")
+                        st.write(", ".join(gaps))
+
                 else:
                     st.error("Failed to calculate ATS score")
+
+            except Exception as e:
+                st.error("ATS service error")
+
+        st.divider()
+
+
+# ---------------- TABS ----------------
+tab1, tab2, tab3 = st.tabs([
+    "🟢 Fresh Jobs (≤7 days)",
+    "🟡 Older Jobs (8–30 days)",
+    "📄 ATS Checker (External Jobs)"
+])
+
+# ---------------- FRESH JOBS ----------------
+with tab1:
+    fresh_jobs = fetch_jobs("/jobs/fresh")
+    st.caption(f"Showing {len(fresh_jobs)} jobs")
+    render_jobs(fresh_jobs, "fresh")
+
+# ---------------- OLDER JOBS ----------------
+with tab2:
+    older_jobs = fetch_jobs("/jobs/older")
+    st.caption(f"Showing {len(older_jobs)} jobs")
+    render_jobs(older_jobs, "older")
+
+# ---------------- ATS ONLY ----------------
+with tab3:
+    st.subheader("📄 AI ATS Checker (Manual Job Description)")
+
+    job_text = st.text_area("Paste Job Description", height=200)
+    resume_text = st.text_area("Paste Resume Text", height=200)
+
+    if st.button("Run AI ATS Check"):
+        if not job_text or not resume_text:
+            st.warning("Please paste both job description and resume")
+        else:
+            try:
+                res = requests.post(
+                    f"{BACKEND_BASE}/ats/manual",
+                    json={
+                        "job_text": job_text,
+                        "resume_text": resume_text
+                    },
+                    timeout=30
+                )
+
+                if res.status_code == 200:
+                    data = res.json()
+
+                    st.success(f"🎯 ATS Match Score: {data.get('score', 0)}%")
+
+                    if data.get("strengths"):
+                        st.markdown("### ✅ Strengths")
+                        st.write(", ".join(data["strengths"]))
+
+                    if data.get("gaps"):
+                        st.markdown("### ❌ Skill Gaps")
+                        st.write(", ".join(data["gaps"]))
+
+                else:
+                    st.error("Failed to calculate ATS score")
+
+            except Exception:
+                st.error("ATS service error")
