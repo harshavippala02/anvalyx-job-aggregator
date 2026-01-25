@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -14,8 +14,7 @@ from database import (
 
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
-
-from ats_engine import calculate_ats
+from ats import calculate_ats_score
 
 app = FastAPI()
 
@@ -71,7 +70,7 @@ def get_jobs():
             "location": j.location,
             "url": j.url,
             "source": j.source,
-            "posted_at": j.posted_at
+            "posted_at": j.posted_at,
         }
         for j in jobs
     ]
@@ -102,52 +101,46 @@ def fetch_resume():
     }
 
 # -----------------------------
-# ATS APIs
+# ATS APIs (AI-based)
 # -----------------------------
 class ATSRequest(BaseModel):
     job_description: str
 
 @app.post("/ats/score")
 def ats_score_manual(payload: ATSRequest):
-    """
-    ATS score for pasted job descriptions
-    (manual ATS checker tab)
-    """
     resume = get_active_resume()
     if not resume:
-        return {"error": "No resume found. Upload resume first."}
+        raise HTTPException(status_code=400, detail="No resume stored")
 
-    return calculate_ats(
+    result = calculate_ats_score(
         resume.resume_text,
         payload.job_description
     )
 
+    return result
+
 @app.get("/ats/score/job/{job_id}")
 def ats_score_for_job(job_id: int):
-    """
-    ATS score for a job inside Anvalyx
-    (per-job ATS)
-    """
     db: Session = SessionLocal()
     job = db.query(Job).filter(Job.id == job_id).first()
     db.close()
 
     if not job:
-        return {"error": "Job not found"}
+        raise HTTPException(status_code=404, detail="Job not found")
 
     resume = get_active_resume()
     if not resume:
-        return {"error": "No resume found. Upload resume first."}
+        raise HTTPException(status_code=400, detail="No resume stored")
 
-    # Build job text (can be expanded later)
     job_text = f"""
     {job.title}
     {job.company}
     {job.location}
-    {job.source}
     """
 
-    return calculate_ats(
+    result = calculate_ats_score(
         resume.resume_text,
         job_text
     )
+
+    return result
