@@ -20,7 +20,7 @@ from ats import calculate_ai_ats, ATSRequest
 # --------------------------------------------------
 # App
 # --------------------------------------------------
-app = FastAPI()
+app = FastAPI(title="Anvalyx Backend")
 
 # --------------------------------------------------
 # Scheduler
@@ -28,11 +28,17 @@ app = FastAPI()
 scheduler = BackgroundScheduler()
 
 def refresh_jobs():
-    adzuna_jobs = fetch_adzuna_jobs()
-    save_jobs(adzuna_jobs)
+    try:
+        adzuna_jobs = fetch_adzuna_jobs()
+        save_jobs(adzuna_jobs)
 
-    usajobs = fetch_usajobs()
-    save_jobs(usajobs)
+        usajobs = fetch_usajobs()
+        save_jobs(usajobs)
+
+        print("✅ Jobs refreshed successfully")
+
+    except Exception as e:
+        print("❌ Job refresh failed:", e)
 
 scheduler.add_job(refresh_jobs, "interval", minutes=10)
 
@@ -53,26 +59,33 @@ def health():
     return {"status": "Anvalyx backend running"}
 
 # --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+def serialize_job(j: Job):
+    return {
+        "id": j.id,
+        "title": j.title,
+        "company": j.company,
+        "location": j.location,
+        "apply_url": j.url,
+        "source": j.source,
+        "posted": j.posted_at.strftime("%Y-%m-%d")
+    }
+
+# --------------------------------------------------
 # Jobs API (ALL)
 # --------------------------------------------------
 @app.get("/jobs")
 def get_jobs():
     db: Session = SessionLocal()
-    jobs = db.query(Job).order_by(Job.posted_at.desc()).all()
+    jobs = (
+        db.query(Job)
+        .filter(Job.posted_at.isnot(None))
+        .order_by(Job.posted_at.desc())
+        .all()
+    )
     db.close()
-
-    return [
-        {
-            "id": j.id,
-            "title": j.title,
-            "company": j.company,
-            "location": j.location,
-            "apply_url": j.url,
-            "source": j.source,
-            "posted": j.posted_at.strftime("%Y-%m-%d")
-        }
-        for j in jobs
-    ]
+    return [serialize_job(j) for j in jobs]
 
 # --------------------------------------------------
 # Jobs API (FRESH ≤ 7 DAYS)
@@ -84,24 +97,15 @@ def get_fresh_jobs():
 
     jobs = (
         db.query(Job)
-        .filter(Job.posted_at >= cutoff)
+        .filter(
+            Job.posted_at.isnot(None),
+            Job.posted_at >= cutoff
+        )
         .order_by(Job.posted_at.desc())
         .all()
     )
     db.close()
-
-    return [
-        {
-            "id": j.id,
-            "title": j.title,
-            "company": j.company,
-            "location": j.location,
-            "apply_url": j.url,
-            "source": j.source,
-            "posted": j.posted_at.strftime("%Y-%m-%d")
-        }
-        for j in jobs
-    ]
+    return [serialize_job(j) for j in jobs]
 
 # --------------------------------------------------
 # Jobs API (OLDER 8–30 DAYS)
@@ -114,24 +118,16 @@ def get_older_jobs():
 
     jobs = (
         db.query(Job)
-        .filter(Job.posted_at < end, Job.posted_at >= start)
+        .filter(
+            Job.posted_at.isnot(None),
+            Job.posted_at < end,
+            Job.posted_at >= start
+        )
         .order_by(Job.posted_at.desc())
         .all()
     )
     db.close()
-
-    return [
-        {
-            "id": j.id,
-            "title": j.title,
-            "company": j.company,
-            "location": j.location,
-            "apply_url": j.url,
-            "source": j.source,
-            "posted": j.posted_at.strftime("%Y-%m-%d")
-        }
-        for j in jobs
-    ]
+    return [serialize_job(j) for j in jobs]
 
 # --------------------------------------------------
 # Resume API
@@ -156,7 +152,7 @@ def fetch_resume():
     }
 
 # --------------------------------------------------
-# AI ATS APIs (ONE SOURCE OF TRUTH)
+# AI ATS APIs
 # --------------------------------------------------
 @app.post("/ats/score")
 def ats_manual(payload: ATSRequest):
@@ -168,9 +164,7 @@ def ats_manual(payload: ATSRequest):
         resume.resume_text,
         payload.job_description
     )
-
     return result
-
 
 @app.get("/ats/score/job/{job_id}")
 def ats_for_job(job_id: int):
@@ -195,5 +189,4 @@ def ats_for_job(job_id: int):
         resume.resume_text,
         job_text
     )
-
     return result

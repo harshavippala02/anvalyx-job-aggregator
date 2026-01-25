@@ -26,20 +26,17 @@ def fetch_jobs(endpoint: str):
             return res.json()
         else:
             st.warning(f"Backend returned {res.status_code}")
-    except Exception as e:
+    except Exception:
         st.error("Backend not reachable")
     return []
 
 def format_posted(job: dict) -> str:
-    """
-    Safely extract posted date from backend
-    """
-    raw = job.get("posted_at") or job.get("posted")
+    raw = job.get("posted")
     if not raw:
         return "Unknown"
 
     try:
-        return datetime.fromisoformat(raw.replace("Z", "")).date().isoformat()
+        return datetime.fromisoformat(raw).date().isoformat()
     except Exception:
         return raw
 
@@ -54,7 +51,7 @@ def render_jobs(job_list, section):
         location = job.get("location", "N/A")
         source = job.get("source", "N/A")
         posted = format_posted(job)
-        apply_url = job.get("apply_url") or job.get("url")
+        apply_url = job.get("apply_url")
         job_id = job.get("id")
 
         st.markdown(f"## {title}")
@@ -80,18 +77,15 @@ def render_jobs(job_list, section):
                 if res.status_code == 200:
                     data = res.json()
 
-                    score = data.get("score", 0)
-                    st.success(f"🎯 ATS Match Score: {score}%")
+                    st.success(f"🎯 ATS Match Score: {data.get('score', 0)}%")
 
-                    strengths = data.get("strengths", [])
-                    if strengths:
+                    if data.get("strengths"):
                         st.markdown("### ✅ Strengths")
-                        st.write(", ".join(strengths))
+                        st.write(", ".join(data["strengths"]))
 
-                    gaps = data.get("gaps", [])
-                    if gaps:
+                    if data.get("gaps"):
                         st.markdown("### ❌ Skill Gaps")
-                        st.write(", ".join(gaps))
+                        st.write(", ".join(data["gaps"]))
                 else:
                     st.error("Failed to calculate ATS score")
 
@@ -109,14 +103,14 @@ tab1, tab2, tab3 = st.tabs([
 
 # ---------------- FRESH JOBS ----------------
 with tab1:
-    fresh_jobs = fetch_jobs("/jobs")
-    st.caption(f"Showing {len(fresh_jobs)} jobs")
+    fresh_jobs = fetch_jobs("/jobs/fresh")   # ✅ FIXED
+    st.caption(f"Showing {len(fresh_jobs)} fresh jobs")
     render_jobs(fresh_jobs, "fresh")
 
 # ---------------- OLDER JOBS ----------------
 with tab2:
-    older_jobs = fetch_jobs("/jobs")
-    st.caption(f"Showing {len(older_jobs)} jobs")
+    older_jobs = fetch_jobs("/jobs/older")   # ✅ FIXED
+    st.caption(f"Showing {len(older_jobs)} older jobs")
     render_jobs(older_jobs, "older")
 
 # ---------------- ATS ONLY ----------------
@@ -124,18 +118,15 @@ with tab3:
     st.subheader("📄 AI ATS Checker (Manual Job Description)")
 
     job_text = st.text_area("Paste Job Description", height=200)
-    resume_text = st.text_area("Paste Resume Text", height=200)
 
     if st.button("Run AI ATS Check"):
-        if not job_text or not resume_text:
-            st.warning("Please paste both job description and resume")
+        if not job_text:
+            st.warning("Please paste a job description")
         else:
             try:
                 res = requests.post(
                     f"{BACKEND_BASE}/ats/score",
-                    json={
-                        "job_description": job_text
-                    },
+                    json={"job_description": job_text},
                     timeout=30
                 )
 
