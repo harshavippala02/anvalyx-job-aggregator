@@ -125,10 +125,27 @@ def render_jobs(job_list, section):
                     if res.status_code == 200:
                         data = res.json()
                         st.success(f"🎯 ATS Match Score: {data['score']}%")
-                        st.caption(data["explanation"])
-                    else:
-                        st.error("Failed to calculate ATS score")
+                    if st.button("📊 Check AI ATS Score", key=f"ats_{section}_{job['external_id']}"):
+    res = requests.post(
+        f"{BACKEND_BASE}/ats/job",
+        json={"job_text": job_text},
+        timeout=30
+    )
 
+    if res.status_code == 200:
+        data = res.json()
+
+        st.success(f"🎯 ATS Match Score: {data['score']}%")
+
+        if "strengths" in data and data["strengths"]:
+            st.markdown("### ✅ Strengths")
+            st.write(", ".join(data["strengths"]))
+
+        if "gaps" in data and data["gaps"]:
+            st.markdown("### ❌ Skill Gaps")
+            st.write(", ".join(data["gaps"]))
+    else:
+        st.error("Failed to calculate ATS score")
         st.divider()
 
     col1, col2, col3 = st.columns([1, 2, 1])
