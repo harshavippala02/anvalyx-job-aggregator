@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from datetime import datetime, timedelta
 
 from database import (
     init_db,
@@ -52,7 +53,7 @@ def health():
     return {"status": "Anvalyx backend running"}
 
 # --------------------------------------------------
-# Jobs API
+# Jobs API (ALL)
 # --------------------------------------------------
 @app.get("/jobs")
 def get_jobs():
@@ -66,9 +67,68 @@ def get_jobs():
             "title": j.title,
             "company": j.company,
             "location": j.location,
-            "url": j.url,
+            "apply_url": j.url,
             "source": j.source,
-            "posted_at": j.posted_at.isoformat()
+            "posted": j.posted_at.strftime("%Y-%m-%d")
+        }
+        for j in jobs
+    ]
+
+# --------------------------------------------------
+# Jobs API (FRESH ≤ 7 DAYS)
+# --------------------------------------------------
+@app.get("/jobs/fresh")
+def get_fresh_jobs():
+    db: Session = SessionLocal()
+    cutoff = datetime.utcnow() - timedelta(days=7)
+
+    jobs = (
+        db.query(Job)
+        .filter(Job.posted_at >= cutoff)
+        .order_by(Job.posted_at.desc())
+        .all()
+    )
+    db.close()
+
+    return [
+        {
+            "id": j.id,
+            "title": j.title,
+            "company": j.company,
+            "location": j.location,
+            "apply_url": j.url,
+            "source": j.source,
+            "posted": j.posted_at.strftime("%Y-%m-%d")
+        }
+        for j in jobs
+    ]
+
+# --------------------------------------------------
+# Jobs API (OLDER 8–30 DAYS)
+# --------------------------------------------------
+@app.get("/jobs/older")
+def get_older_jobs():
+    db: Session = SessionLocal()
+    start = datetime.utcnow() - timedelta(days=30)
+    end = datetime.utcnow() - timedelta(days=7)
+
+    jobs = (
+        db.query(Job)
+        .filter(Job.posted_at < end, Job.posted_at >= start)
+        .order_by(Job.posted_at.desc())
+        .all()
+    )
+    db.close()
+
+    return [
+        {
+            "id": j.id,
+            "title": j.title,
+            "company": j.company,
+            "location": j.location,
+            "apply_url": j.url,
+            "source": j.source,
+            "posted": j.posted_at.strftime("%Y-%m-%d")
         }
         for j in jobs
     ]
