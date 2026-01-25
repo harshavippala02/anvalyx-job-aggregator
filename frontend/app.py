@@ -1,12 +1,14 @@
 import streamlit as st
 import requests
 from datetime import datetime, timezone
+import re
 
 # --------------------------------------------------
 # Config
 # --------------------------------------------------
 BACKEND_BASE = "https://anvalyx-backend.onrender.com"
 JOBS_API = f"{BACKEND_BASE}/jobs"
+RESUME_API = f"{BACKEND_BASE}/resume"
 ATS_JOB_API = f"{BACKEND_BASE}/ats/score/job"
 
 JOBS_PER_PAGE = 10
@@ -17,7 +19,7 @@ st.set_page_config(
 )
 
 st.title("💼 Anvalyx – Job Aggregator")
-st.caption("Jobs + Real ATS Match (Backend Powered)")
+st.caption("Jobs + Resume + Real ATS Match")
 
 # --------------------------------------------------
 # Helpers
@@ -50,6 +52,23 @@ def fetch_jobs():
     res.raise_for_status()
     return res.json()
 
+def fetch_active_resume():
+    try:
+        res = requests.get(RESUME_API, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            if "resume_text" in data:
+                return data["resume_text"]
+    except:
+        pass
+    return None
+
+def save_resume_to_backend(resume_text):
+    payload = {"resume_text": resume_text}
+    res = requests.post(RESUME_API, json=payload, timeout=15)
+    res.raise_for_status()
+    return res.json()
+
 def fetch_ats_for_job(job_id):
     try:
         res = requests.get(f"{ATS_JOB_API}/{job_id}", timeout=15)
@@ -58,6 +77,37 @@ def fetch_ats_for_job(job_id):
     except:
         pass
     return None
+
+# --------------------------------------------------
+# Load resume once
+# --------------------------------------------------
+if "resume_text" not in st.session_state:
+    st.session_state.resume_text = fetch_active_resume()
+
+# --------------------------------------------------
+# Sidebar: Resume Upload (NEW)
+# --------------------------------------------------
+st.sidebar.header("📄 Your Resume")
+
+with st.sidebar:
+    resume_input = st.text_area(
+        "Paste your resume (saved until you change it)",
+        height=200,
+        value=st.session_state.resume_text or ""
+    )
+
+    if st.button("💾 Save Resume"):
+        if not resume_input.strip():
+            st.warning("Resume cannot be empty.")
+        else:
+            save_resume_to_backend(resume_input)
+            st.session_state.resume_text = resume_input
+            st.success("Resume saved successfully!")
+
+    if st.session_state.resume_text:
+        st.success("Active resume loaded")
+    else:
+        st.warning("No resume stored yet")
 
 # --------------------------------------------------
 # Fetch & preprocess jobs
@@ -103,33 +153,26 @@ def render_jobs(job_list, section):
         st.markdown(f"**Posted:** {days_ago(job['posted_dt'])}")
         st.markdown(f"[Apply Here]({job['url']})")
 
-        # --- REAL ATS SCORE (Backend) ---
-        if st.button(
-            "📊 Check ATS Match",
-            key=f"ats_{section}_{job['id']}"
-        ):
-            with st.spinner("Calculating ATS score..."):
-                result = fetch_ats_for_job(job["id"])
+        if st.session_state.resume_text:
+            if st.button("📊 Check ATS Match", key=f"ats_{section}_{job['id']}"):
+                with st.spinner("Calculating ATS score..."):
+                    result = fetch_ats_for_job(job["id"])
 
-            if not result or "ats_score" not in result:
-                st.error("No resume found in backend. Upload resume first.")
-            else:
-                score = result["ats_score"]
-                badge = ats_badge(score)
+                if not result or "ats_score" not in result:
+                    st.error("ATS score unavailable.")
+                else:
+                    score = result["ats_score"]
+                    st.success(f"ATS Match: **{score}%** {ats_badge(score)}")
 
-                st.success(f"ATS Match: **{score}%** {badge}")
+                    with st.expander("Why this score?"):
+                        for k, v in result["breakdown"].items():
+                            st.write(f"- {k.replace('_',' ').title()}: {v}%")
 
-                with st.expander("Why this score?"):
-                    breakdown = result.get("breakdown", {})
-                    st.write("**Score breakdown:**")
-                    for k, v in breakdown.items():
-                        st.write(f"- {k.replace('_',' ').title()}: {v}%")
+                        st.write("**Matched skills:**")
+                        st.write(", ".join(result["matched_core_skills"]) or "None")
 
-                    st.write("**Matched core skills:**")
-                    st.write(", ".join(result.get("matched_core_skills", [])) or "None")
-
-                    st.write("**Missing core skills:**")
-                    st.write(", ".join(result.get("missing_core_skills", [])) or "None")
+                        st.write("**Missing skills:**")
+                        st.write(", ".join(result["missing_core_skills"]) or "None")
 
         st.divider()
 
@@ -168,15 +211,13 @@ fresh_tab, older_tab, ats_tab = st.tabs([
 ])
 
 with fresh_tab:
-    fresh = [j for j in jobs if j["age"] <= 7]
-    render_jobs(fresh, "fresh")
+    render_jobs([j for j in jobs if j["age"] <= 7], "fresh")
 
 with older_tab:
-    older = [j for j in jobs if 8 <= j["age"] <= 30]
-    render_jobs(older, "older")
+    render_jobs([j for j in jobs if 8 <= j["age"] <= 30], "older")
 
 # --------------------------------------------------
-# MANUAL ATS TAB (UNCHANGED ON PURPOSE)
+# MANUAL ATS TAB (UNCHANGED)
 # --------------------------------------------------
 with ats_tab:
     st.subheader("📄 ATS Match Checker")
@@ -189,7 +230,4 @@ with ats_tab:
         if not resume_text or not jd_text:
             st.warning("Please paste both resume and job description.")
         else:
-            st.info(
-                "Manual ATS uses basic keyword logic. "
-                "Job cards use REAL backend ATS."
-            )
+            st.info("Manual ATS uses basic keyword logic. Job cards use real backend ATS.")
