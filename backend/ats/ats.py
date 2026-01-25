@@ -1,12 +1,13 @@
 import os
+from dotenv import load_dotenv
 from typing import List
 from pydantic import BaseModel
 from sklearn.metrics.pairwise import cosine_similarity
 from openai import OpenAI
 
-# --------------------------------------------------
-# OpenAI Client
-# --------------------------------------------------
+# 👇 ADD THIS
+load_dotenv()
+
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 EMBED_MODEL = "text-embedding-3-small"

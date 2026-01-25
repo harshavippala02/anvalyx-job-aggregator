@@ -1,8 +1,16 @@
+from dotenv import load_dotenv
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
 from fastapi import FastAPI, HTTPException
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from backend.ats.ats import calculate_ai_ats, ATSRequest
+from backend.ats.resume_parser import parse_resume
 
 from database import (
     init_db,
@@ -15,7 +23,6 @@ from database import (
 
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
-from ats import calculate_ai_ats, ATSRequest
 
 # --------------------------------------------------
 # App
@@ -150,6 +157,18 @@ def fetch_resume():
         "resume_text": resume.resume_text,
         "updated_at": resume.updated_at
     }
+
+# --------------------------------------------------
+# ATS Resume Parser API (DEBUG / VISIBILITY)
+# --------------------------------------------------
+@app.post("/ats/parse-resume")
+def parse_resume_api(payload: ResumeRequest):
+    """
+    Parse resume text into ATS-visible structure.
+    This endpoint is for transparency and debugging.
+    """
+    parsed = parse_resume(payload.resume_text)
+    return parsed
 
 # --------------------------------------------------
 # AI ATS APIs
