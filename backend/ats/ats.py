@@ -39,10 +39,17 @@ def score_manual_job(payload: ATSRequest):
                 detail="No resume found. Please upload a resume first."
             )
 
-        result = calculate_ats_score(
-            resume_text=resume_text,
-            job_text=payload.job_description
-        )
+        try:
+            result = calculate_ats_score(
+                resume_text=resume_text,
+                job_text=payload.job_description
+            )
+        except Exception as e:
+            print("❌ ATS CALCULATION ERROR (manual):", str(e))
+            raise HTTPException(
+                status_code=500,
+                detail=str(e)
+            )
 
         return {
             "score": result["ats_score"],
@@ -52,6 +59,7 @@ def score_manual_job(payload: ATSRequest):
             "interpretation": result["interpretation"],
             "breakdown": result["breakdown"]
         }
+
     finally:
         db.close()
 
@@ -71,10 +79,23 @@ def score_job(job_id: int):
                 detail="No resume found. Please upload a resume first."
             )
 
-        result = calculate_ats_score(
-            resume_text=resume_text,
-            job_text=job.description
-        )
+        if not job.description or not job.description.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Job description is empty. ATS score cannot be calculated."
+            )
+
+        try:
+            result = calculate_ats_score(
+                resume_text=resume_text,
+                job_text=job.description
+            )
+        except Exception as e:
+            print("❌ ATS CALCULATION ERROR (job):", str(e))
+            raise HTTPException(
+                status_code=500,
+                detail=str(e)
+            )
 
         return {
             "score": result["ats_score"],
@@ -84,5 +105,6 @@ def score_job(job_id: int):
             "interpretation": result["interpretation"],
             "breakdown": result["breakdown"]
         }
+
     finally:
         db.close()

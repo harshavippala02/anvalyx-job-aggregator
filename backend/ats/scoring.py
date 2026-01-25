@@ -1,10 +1,16 @@
-import re
 import os
+import re
 from typing import Dict, List
 from sklearn.metrics.pairwise import cosine_similarity
 from openai import OpenAI
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# ---------------- OPENAI CLIENT ----------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY is not set")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+
 EMBED_MODEL = "text-embedding-3-small"
 
 # ---------------- FEATURE FLAGS ----------------
@@ -25,11 +31,18 @@ COMMON_SKILLS = [
 
 # ---------------- HELPERS ----------------
 def embed_text(text: str) -> List[float]:
-    response = client.embeddings.create(
-        model=EMBED_MODEL,
-        input=text[:3000]
-    )
-    return response.data[0].embedding
+    if not text or not text.strip():
+        raise ValueError("Empty text passed to embeddings")
+
+    try:
+        response = client.embeddings.create(
+            model=EMBED_MODEL,
+            input=text[:3000]
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        print("❌ OPENAI EMBEDDING ERROR:", str(e))
+        raise
 
 
 def normalize_score(raw_similarity: float) -> int:
@@ -75,8 +88,17 @@ def confidence_label(score: int) -> str:
 # ---------------- MAIN ATS ENGINE ----------------
 def calculate_ats_score(resume_text: str, job_text: str) -> Dict:
 
-    resume_embedding = embed_text(resume_text)
-    job_embedding = embed_text(job_text)
+    if not resume_text.strip():
+        raise ValueError("Resume text is empty")
+
+    if not job_text.strip():
+        raise ValueError("Job description is empty")
+
+    try:
+        resume_embedding = embed_text(resume_text)
+        job_embedding = embed_text(job_text)
+    except Exception:
+        raise  # already logged
 
     similarity = cosine_similarity(
         [resume_embedding],
