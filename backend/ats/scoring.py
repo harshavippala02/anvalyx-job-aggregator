@@ -1,132 +1,129 @@
-from typing import List, Dict
 import re
-from difflib import SequenceMatcher
+from typing import Dict, List
+from sklearn.metrics.pairwise import cosine_similarity
+
+# ---------------- FEATURE FLAGS ----------------
+ENABLE_NORMALIZATION = True
+ENABLE_KEYWORD_BOOST = True
+ENABLE_MISSING_SKILLS = True
+
+# ---------------- CONFIG ----------------
+MIN_SCORE = 35
+MAX_SCORE = 95
+KEYWORD_BOOST_MAX = 15
+
+COMMON_SKILLS = [
+    "sql", "python", "r", "power bi", "tableau", "excel",
+    "snowflake", "aws", "azure", "gcp", "airflow", "dbt",
+    "etl", "data analysis", "machine learning", "statistics"
+]
+
+# ---------------- HELPERS ----------------
+def normalize_score(raw_score: float) -> int:
+    """
+    Converts raw cosine similarity into realistic ATS score
+    """
+    score = int(raw_score * 100)
+    return max(MIN_SCORE, min(MAX_SCORE, score))
 
 
-# -------------------------------
-# Helpers
-# -------------------------------
-
-def normalize(text: str) -> str:
-    return re.sub(r"[^a-z0-9 ]", "", text.lower())
-
-
-def similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, normalize(a), normalize(b)).ratio()
+def extract_keywords(text: str) -> List[str]:
+    text = text.lower()
+    found = []
+    for skill in COMMON_SKILLS:
+        pattern = r"\b" + re.escape(skill) + r"\b"
+        if re.search(pattern, text):
+            found.append(skill)
+    return list(set(found))
 
 
-# -------------------------------
-# Core ATS Scoring
-# -------------------------------
+def keyword_boost(resume_text: str, job_text: str) -> Dict:
+    resume_skills = extract_keywords(resume_text)
+    job_skills = extract_keywords(job_text)
 
+    matched = list(set(resume_skills) & set(job_skills))
+    missing = list(set(job_skills) - set(resume_skills))
+
+    boost = min(len(matched) * 3, KEYWORD_BOOST_MAX)
+
+    return {
+        "boost": boost,
+        "matched": matched,
+        "missing": missing
+    }
+
+
+def confidence_label(score: int) -> str:
+    if score >= 80:
+        return "High"
+    elif score >= 60:
+        return "Medium–High"
+    elif score >= 45:
+        return "Medium"
+    return "Low"
+
+# ---------------- MAIN ATS ENGINE ----------------
 def calculate_ats_score(
-    resume: Dict,
-    job: Dict
+    resume_embedding: List[float],
+    job_embedding: List[float],
+    resume_text: str,
+    job_text: str
 ) -> Dict:
-    """
-    resume: {
-        "skills": [],
-        "titles": [],
-        "years_experience": int
-    }
 
-    job: {
-        "skills": [],
-        "title": str,
-        "required_years": int,
-        "tools": []
-    }
-    """
+    # 1️⃣ Semantic similarity
+    similarity = cosine_similarity(
+        [resume_embedding],
+        [job_embedding]
+    )[0][0]
 
-    score = 0
-    breakdown = {}
+    semantic_score = int(similarity * 100)
 
-    # -------------------------------
-    # 1. Skill Match (40)
-    # -------------------------------
-    resume_skills = set(map(normalize, resume.get("skills", [])))
-    job_skills = set(map(normalize, job.get("skills", [])))
-
-    matched_skills = resume_skills.intersection(job_skills)
-    missing_skills = sorted(job_skills - resume_skills)
-
-    skill_score = int((len(matched_skills) / max(len(job_skills), 1)) * 40)
-    breakdown["skill_match"] = skill_score
-    score += skill_score
-
-    # -------------------------------
-    # 2. Role Alignment (20)
-    # -------------------------------
-    title_scores = [
-        similarity(resume_title, job.get("title", ""))
-        for resume_title in resume.get("titles", [])
-    ]
-
-    best_title_match = max(title_scores, default=0)
-    role_score = int(best_title_match * 20)
-
-    breakdown["role_alignment"] = role_score
-    score += role_score
-
-    # -------------------------------
-    # 3. Experience Relevance (15)
-    # -------------------------------
-    resume_years = resume.get("years_experience", 0)
-    required_years = job.get("required_years", resume_years)
-
-    experience_score = int(
-        min(resume_years / max(required_years, 1), 1.0) * 15
+    # 2️⃣ Normalize
+    base_score = (
+        normalize_score(similarity)
+        if ENABLE_NORMALIZATION
+        else semantic_score
     )
 
-    breakdown["experience_relevance"] = experience_score
-    score += experience_score
-
-    # -------------------------------
-    # 4. Tools & Tech Stack (15)
-    # -------------------------------
-    resume_tools = set(map(normalize, resume.get("skills", [])))
-    job_tools = set(map(normalize, job.get("tools", [])))
-
-    matched_tools = resume_tools.intersection(job_tools)
-
-    tools_score = int((len(matched_tools) / max(len(job_tools), 1)) * 15)
-    breakdown["tools_tech_match"] = tools_score
-    score += tools_score
-
-    # -------------------------------
-    # 5. Resume Quality (10)
-    # -------------------------------
-    quality_score = 6  # baseline
-    if resume_years >= 3:
-        quality_score += 2
-    if len(resume.get("skills", [])) >= 8:
-        quality_score += 2
-
-    quality_score = min(quality_score, 10)
-    breakdown["resume_quality"] = quality_score
-    score += quality_score
-
-    # -------------------------------
-    # Final Output
-    # -------------------------------
-    return {
-        "ats_score": min(score, 100),
-        "breakdown": breakdown,
-        "missing_skills": list(missing_skills),
-        "interpretation": interpret_score(score)
+    breakdown = {
+        "semantic_match": semantic_score
     }
 
+    final_score = base_score
+    missing_skills = []
 
-# -------------------------------
-# Score Meaning
-# -------------------------------
+    # 3️⃣ Keyword boost
+    if ENABLE_KEYWORD_BOOST:
+        kb = keyword_boost(resume_text, job_text)
+        final_score += kb["boost"]
+        final_score = min(final_score, MAX_SCORE)
 
-def interpret_score(score: int) -> str:
-    if score >= 85:
-        return "Very strong – recruiter-safe"
-    elif score >= 70:
-        return "Good – apply with minor tweaks"
-    elif score >= 55:
-        return "Risky – optimize resume"
+        breakdown["keyword_boost"] = kb["boost"]
+
+        if ENABLE_MISSING_SKILLS:
+            missing_skills = kb["missing"][:5]
+
+    # 4️⃣ Interpretation
+    if final_score >= 80:
+        interpretation = "Strong ATS match. Resume aligns well with job requirements."
+    elif final_score >= 60:
+        interpretation = "Good ATS match. Minor optimizations could improve ranking."
+    elif final_score >= 45:
+        interpretation = "Moderate ATS match. Resume lacks some key skills."
     else:
-        return "Likely auto-reject"
+        interpretation = "Low ATS match. Resume is missing several core requirements."
+
+    strengths = []
+    if semantic_score >= 60:
+        strengths.append("Strong role and experience alignment")
+    if ENABLE_KEYWORD_BOOST and breakdown.get("keyword_boost", 0) > 0:
+        strengths.append("Relevant technical skills detected")
+
+    return {
+        "ats_score": final_score,
+        "confidence": confidence_label(final_score),
+        "breakdown": breakdown,
+        "missing_skills": missing_skills,
+        "strengths": strengths,
+        "interpretation": interpretation
+    }
