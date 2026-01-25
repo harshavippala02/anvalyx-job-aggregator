@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -14,13 +14,16 @@ from database import (
 
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
-from ats import calculate_ats_score
+from ats import ATSRequest, calculate_ats
 
+# --------------------------------------------------
+# App
+# --------------------------------------------------
 app = FastAPI()
 
-# -----------------------------
+# --------------------------------------------------
 # Scheduler
-# -----------------------------
+# --------------------------------------------------
 scheduler = BackgroundScheduler()
 
 def refresh_jobs():
@@ -36,9 +39,9 @@ def refresh_jobs():
 
 scheduler.add_job(refresh_jobs, "interval", minutes=10)
 
-# -----------------------------
+# --------------------------------------------------
 # Startup
-# -----------------------------
+# --------------------------------------------------
 @app.on_event("startup")
 def startup_event():
     init_db()
@@ -46,16 +49,16 @@ def startup_event():
     scheduler.start()
     print("⏱️ Scheduler started (10-minute interval)")
 
-# -----------------------------
+# --------------------------------------------------
 # Health
-# -----------------------------
+# --------------------------------------------------
 @app.get("/")
 def health():
     return {"status": "Anvalyx backend running"}
 
-# -----------------------------
+# --------------------------------------------------
 # Jobs API
-# -----------------------------
+# --------------------------------------------------
 @app.get("/jobs")
 def get_jobs():
     db: Session = SessionLocal()
@@ -64,20 +67,19 @@ def get_jobs():
 
     return [
         {
-            "id": j.id,
             "title": j.title,
             "company": j.company,
             "location": j.location,
             "url": j.url,
             "source": j.source,
-            "posted_at": j.posted_at,
+            "posted_at": j.posted_at
         }
         for j in jobs
     ]
 
-# -----------------------------
+# --------------------------------------------------
 # Resume API
-# -----------------------------
+# --------------------------------------------------
 class ResumeRequest(BaseModel):
     resume_text: str
 
@@ -100,47 +102,19 @@ def fetch_resume():
         "updated_at": resume.updated_at
     }
 
-# -----------------------------
-# ATS APIs (AI-based)
-# -----------------------------
-class ATSRequest(BaseModel):
-    job_description: str
-
-@app.post("/ats/score")
-def ats_score_manual(payload: ATSRequest):
-    resume = get_active_resume()
-    if not resume:
-        raise HTTPException(status_code=400, detail="No resume stored")
-
-    result = calculate_ats_score(
-        resume.resume_text,
-        payload.job_description
+# --------------------------------------------------
+# ATS API (STANDARDIZED RESPONSE)
+# --------------------------------------------------
+@app.post("/ats")
+def ats_check(payload: ATSRequest):
+    result = calculate_ats(
+        resume_text=payload.resume_text,
+        job_text=payload.job_text
     )
 
-    return result
-
-@app.get("/ats/score/job/{job_id}")
-def ats_score_for_job(job_id: int):
-    db: Session = SessionLocal()
-    job = db.query(Job).filter(Job.id == job_id).first()
-    db.close()
-
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    resume = get_active_resume()
-    if not resume:
-        raise HTTPException(status_code=400, detail="No resume stored")
-
-    job_text = f"""
-    {job.title}
-    {job.company}
-    {job.location}
-    """
-
-    result = calculate_ats_score(
-        resume.resume_text,
-        job_text
-    )
-
-    return result
+    return {
+        "score": result.score,
+        "matched": result.matched,
+        "missing": result.missing,
+        "summary": result.summary
+    }
