@@ -1,17 +1,20 @@
 from dotenv import load_dotenv
 import os
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
-
 from fastapi import FastAPI, HTTPException
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-from backend.ats.ats import calculate_ai_ats, ATSRequest
-from backend.ats.resume_parser import parse_resume
 
+# --------------------------------------------------
+# ENV
+# --------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+# --------------------------------------------------
+# Internal imports
+# --------------------------------------------------
 from database import (
     init_db,
     save_jobs,
@@ -24,10 +27,16 @@ from database import (
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
 
+# 👉 IMPORT ATS ROUTER (IMPORTANT)
+from backend.ats.ats import router as ats_router
+
 # --------------------------------------------------
 # App
 # --------------------------------------------------
 app = FastAPI(title="Anvalyx Backend")
+
+# Register ATS routes
+app.include_router(ats_router)
 
 # --------------------------------------------------
 # Scheduler
@@ -76,11 +85,11 @@ def serialize_job(j: Job):
         "location": j.location,
         "apply_url": j.url,
         "source": j.source,
-        "posted": j.posted_at.strftime("%Y-%m-%d")
+        "posted": j.posted_at.strftime("%Y-%m-%d") if j.posted_at else None
     }
 
 # --------------------------------------------------
-# Jobs API (ALL)
+# Jobs API
 # --------------------------------------------------
 @app.get("/jobs")
 def get_jobs():
@@ -94,9 +103,6 @@ def get_jobs():
     db.close()
     return [serialize_job(j) for j in jobs]
 
-# --------------------------------------------------
-# Jobs API (FRESH ≤ 7 DAYS)
-# --------------------------------------------------
 @app.get("/jobs/fresh")
 def get_fresh_jobs():
     db: Session = SessionLocal()
@@ -104,19 +110,13 @@ def get_fresh_jobs():
 
     jobs = (
         db.query(Job)
-        .filter(
-            Job.posted_at.isnot(None),
-            Job.posted_at >= cutoff
-        )
+        .filter(Job.posted_at >= cutoff)
         .order_by(Job.posted_at.desc())
         .all()
     )
     db.close()
     return [serialize_job(j) for j in jobs]
 
-# --------------------------------------------------
-# Jobs API (OLDER 8–30 DAYS)
-# --------------------------------------------------
 @app.get("/jobs/older")
 def get_older_jobs():
     db: Session = SessionLocal()
@@ -125,11 +125,7 @@ def get_older_jobs():
 
     jobs = (
         db.query(Job)
-        .filter(
-            Job.posted_at.isnot(None),
-            Job.posted_at < end,
-            Job.posted_at >= start
-        )
+        .filter(Job.posted_at < end, Job.posted_at >= start)
         .order_by(Job.posted_at.desc())
         .all()
     )
@@ -157,55 +153,3 @@ def fetch_resume():
         "resume_text": resume.resume_text,
         "updated_at": resume.updated_at
     }
-
-# --------------------------------------------------
-# ATS Resume Parser API (DEBUG / VISIBILITY)
-# --------------------------------------------------
-@app.post("/ats/parse-resume")
-def parse_resume_api(payload: ResumeRequest):
-    """
-    Parse resume text into ATS-visible structure.
-    This endpoint is for transparency and debugging.
-    """
-    parsed = parse_resume(payload.resume_text)
-    return parsed
-
-# --------------------------------------------------
-# AI ATS APIs
-# --------------------------------------------------
-@app.post("/ats/score")
-def ats_manual(payload: ATSRequest):
-    resume = get_active_resume()
-    if not resume:
-        raise HTTPException(status_code=400, detail="No resume stored")
-
-    result = calculate_ai_ats(
-        resume.resume_text,
-        payload.job_description
-    )
-    return result
-
-@app.get("/ats/score/job/{job_id}")
-def ats_for_job(job_id: int):
-    db: Session = SessionLocal()
-    job = db.query(Job).filter(Job.id == job_id).first()
-    db.close()
-
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    resume = get_active_resume()
-    if not resume:
-        raise HTTPException(status_code=400, detail="No resume stored")
-
-    job_text = f"""
-    {job.title}
-    {job.company}
-    {job.location}
-    """
-
-    result = calculate_ai_ats(
-        resume.resume_text,
-        job_text
-    )
-    return result
