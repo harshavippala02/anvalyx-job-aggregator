@@ -67,6 +67,7 @@ def get_jobs():
 
     return [
         {
+            "id": j.id,
             "title": j.title,
             "company": j.company,
             "location": j.location,
