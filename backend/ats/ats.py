@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from backend.database import get_db
-from backend.models import Job, Resume
+from database import get_db
+from models import Job, Resume
 from backend.ats.scoring import calculate_ats_score
 
 # ---------------- ENV ----------------
