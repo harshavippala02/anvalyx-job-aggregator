@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -14,7 +14,7 @@ from database import (
 
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
-from ats import ATSRequest, calculate_ats
+from ats import calculate_ai_ats, ATSRequest
 
 # --------------------------------------------------
 # App
@@ -27,15 +27,11 @@ app = FastAPI()
 scheduler = BackgroundScheduler()
 
 def refresh_jobs():
-    print("🔄 Refreshing jobs from Adzuna...")
     adzuna_jobs = fetch_adzuna_jobs()
     save_jobs(adzuna_jobs)
-    print(f"✅ Saved {len(adzuna_jobs)} Adzuna jobs")
 
-    print("🔄 Refreshing jobs from USAJobs...")
     usajobs = fetch_usajobs()
     save_jobs(usajobs)
-    print(f"✅ Saved {len(usajobs)} USAJobs jobs")
 
 scheduler.add_job(refresh_jobs, "interval", minutes=10)
 
@@ -47,7 +43,6 @@ def startup_event():
     init_db()
     refresh_jobs()
     scheduler.start()
-    print("⏱️ Scheduler started (10-minute interval)")
 
 # --------------------------------------------------
 # Health
@@ -73,7 +68,7 @@ def get_jobs():
             "location": j.location,
             "url": j.url,
             "source": j.source,
-            "posted_at": j.posted_at
+            "posted_at": j.posted_at.isoformat()
         }
         for j in jobs
     ]
@@ -87,10 +82,7 @@ class ResumeRequest(BaseModel):
 @app.post("/resume")
 def upload_resume(payload: ResumeRequest):
     resume = save_resume(payload.resume_text)
-    return {
-        "message": "Resume saved successfully",
-        "resume_id": resume.id
-    }
+    return {"message": "Resume saved", "resume_id": resume.id}
 
 @app.get("/resume")
 def fetch_resume():
@@ -104,18 +96,44 @@ def fetch_resume():
     }
 
 # --------------------------------------------------
-# ATS API (STANDARDIZED RESPONSE)
+# AI ATS APIs (ONE SOURCE OF TRUTH)
 # --------------------------------------------------
-@app.post("/ats")
-def ats_check(payload: ATSRequest):
-    result = calculate_ats(
-        resume_text=payload.resume_text,
-        job_text=payload.job_text
+@app.post("/ats/score")
+def ats_manual(payload: ATSRequest):
+    resume = get_active_resume()
+    if not resume:
+        raise HTTPException(status_code=400, detail="No resume stored")
+
+    result = calculate_ai_ats(
+        resume.resume_text,
+        payload.job_description
     )
 
-    return {
-        "score": result.score,
-        "matched": result.matched,
-        "missing": result.missing,
-        "summary": result.summary
-    }
+    return result
+
+
+@app.get("/ats/score/job/{job_id}")
+def ats_for_job(job_id: int):
+    db: Session = SessionLocal()
+    job = db.query(Job).filter(Job.id == job_id).first()
+    db.close()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    resume = get_active_resume()
+    if not resume:
+        raise HTTPException(status_code=400, detail="No resume stored")
+
+    job_text = f"""
+    {job.title}
+    {job.company}
+    {job.location}
+    """
+
+    result = calculate_ai_ats(
+        resume.resume_text,
+        job_text
+    )
+
+    return result
