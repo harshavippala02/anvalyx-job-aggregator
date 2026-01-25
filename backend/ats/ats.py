@@ -1,122 +1,90 @@
 import os
-from dotenv import load_dotenv
-from typing import List, Dict
+from typing import Optional
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
-from sklearn.metrics.pairwise import cosine_similarity
-from openai import OpenAI
+from dotenv import load_dotenv
 
+from backend.database import get_db
+from backend.models import Job, Resume
 from backend.ats.scoring import calculate_ats_score
-from backend.ats.resume_parser import parse_resume
 
-# --------------------------------------------------
-# Environment
-# --------------------------------------------------
+# ---------------- ENV ----------------
 load_dotenv()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+router = APIRouter(prefix="/ats", tags=["ATS"])
 
-EMBED_MODEL = "text-embedding-3-small"
-
-# --------------------------------------------------
-# Request Models
-# --------------------------------------------------
+# ---------------- REQUEST MODELS ----------------
 class ATSRequest(BaseModel):
     job_description: str
 
-# --------------------------------------------------
-# Helpers (AI Embeddings)
-# --------------------------------------------------
-def embed_text(text: str) -> List[float]:
-    response = client.embeddings.create(
-        model=EMBED_MODEL,
-        input=text
+# ---------------- HELPERS ----------------
+def get_latest_resume_text(db) -> Optional[str]:
+    resume = (
+        db.query(Resume)
+        .order_by(Resume.created_at.desc())
+        .first()
     )
-    return response.data[0].embedding
+    return resume.text if resume else None
 
-# --------------------------------------------------
-# OPTIONAL: AI-BASED ATS (SECONDARY)
-# --------------------------------------------------
-def calculate_ai_ats(resume_text: str, job_text: str) -> Dict:
+# ---------------- ROUTES ----------------
+
+@router.post("/score")
+def score_manual_job(payload: ATSRequest):
     """
-    AI-based similarity score (kept for optional comparison).
-    Not the primary ATS score anymore.
+    Manual ATS check (resume vs pasted job description)
     """
-    resume_embedding = embed_text(resume_text)
-    job_embedding = embed_text(job_text)
+    db = next(get_db())
+    resume_text = get_latest_resume_text(db)
 
-    similarity = cosine_similarity(
-        [resume_embedding],
-        [job_embedding]
-    )[0][0]
+    if not resume_text:
+        raise HTTPException(
+            status_code=400,
+            detail="No resume found. Please upload a resume first."
+        )
 
-    score = int(similarity * 100)
-
-    strengths = []
-    gaps = []
-
-    if score >= 70:
-        strengths.append("Strong semantic alignment with job requirements")
-    elif score >= 50:
-        strengths.append("Moderate semantic alignment")
-        gaps.append("Some key skills or role context may be missing")
-    else:
-        gaps.append("Low semantic match with job description")
-
-    return {
-        "ai_score": score,
-        "strengths": strengths,
-        "gaps": gaps
-    }
-
-# --------------------------------------------------
-# PRIMARY ATS SCORING (RULE-BASED, TRUSTED)
-# --------------------------------------------------
-def calculate_ats_for_job(
-    resume_text: str,
-    job_description: str,
-    job_title: str = "",
-    required_years: int = 0
-) -> Dict:
-    """
-    Main ATS scoring function used by the app.
-    """
-
-    # 1️⃣ Parse resume
-    parsed_resume = parse_resume(resume_text)
-
-    structured_resume = {
-        "skills": parsed_resume.get("skills", []),
-        "titles": parsed_resume.get("titles", []),
-        "years_experience": parsed_resume.get("years_experience", 0)
-    }
-
-    # 2️⃣ Extract job-side data (simple version for now)
-    job_skills = parse_resume(job_description).get("skills", [])
-
-    structured_job = {
-        "skills": job_skills,
-        "title": job_title,
-        "required_years": required_years,
-        "tools": job_skills
-    }
-
-    # 3️⃣ Rule-based ATS score (PRIMARY)
-    ats_result = calculate_ats_score(
-        resume=structured_resume,
-        job=structured_job
-    )
-
-    # 4️⃣ Optional AI score (SECONDARY, informational)
-    ai_result = calculate_ai_ats(
+    result = calculate_ats_score(
         resume_text=resume_text,
-        job_text=job_description
+        job_text=payload.job_description
     )
 
-    # 5️⃣ Combined response
     return {
-        "ats_score": ats_result["ats_score"],
-        "interpretation": ats_result["interpretation"],
-        "breakdown": ats_result["breakdown"],
-        "missing_skills": ats_result["missing_skills"],
-        "ai_similarity_score": ai_result["ai_score"]
+        "score": result["ats_score"],
+        "confidence": result["confidence"],
+        "strengths": result["strengths"],
+        "missing_skills": result["missing_skills"],
+        "interpretation": result["interpretation"],
+        "breakdown": result["breakdown"]
+    }
+
+
+@router.get("/score/job/{job_id}")
+def score_job(job_id: int):
+    """
+    ATS check for a job already stored in DB
+    """
+    db = next(get_db())
+
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    resume_text = get_latest_resume_text(db)
+    if not resume_text:
+        raise HTTPException(
+            status_code=400,
+            detail="No resume found. Please upload a resume first."
+        )
+
+    result = calculate_ats_score(
+        resume_text=resume_text,
+        job_text=job.description
+    )
+
+    return {
+        "score": result["ats_score"],
+        "confidence": result["confidence"],
+        "strengths": result["strengths"],
+        "missing_skills": result["missing_skills"],
+        "interpretation": result["interpretation"],
+        "breakdown": result["breakdown"]
     }

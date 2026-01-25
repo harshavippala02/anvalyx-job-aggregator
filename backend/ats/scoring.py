@@ -1,6 +1,11 @@
 import re
+import os
 from typing import Dict, List
 from sklearn.metrics.pairwise import cosine_similarity
+from openai import OpenAI
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+EMBED_MODEL = "text-embedding-3-small"
 
 # ---------------- FEATURE FLAGS ----------------
 ENABLE_NORMALIZATION = True
@@ -19,11 +24,16 @@ COMMON_SKILLS = [
 ]
 
 # ---------------- HELPERS ----------------
-def normalize_score(raw_score: float) -> int:
-    """
-    Converts raw cosine similarity into realistic ATS score
-    """
-    score = int(raw_score * 100)
+def embed_text(text: str) -> List[float]:
+    response = client.embeddings.create(
+        model=EMBED_MODEL,
+        input=text[:3000]
+    )
+    return response.data[0].embedding
+
+
+def normalize_score(raw_similarity: float) -> int:
+    score = int(raw_similarity * 100)
     return max(MIN_SCORE, min(MAX_SCORE, score))
 
 
@@ -63,14 +73,11 @@ def confidence_label(score: int) -> str:
     return "Low"
 
 # ---------------- MAIN ATS ENGINE ----------------
-def calculate_ats_score(
-    resume_embedding: List[float],
-    job_embedding: List[float],
-    resume_text: str,
-    job_text: str
-) -> Dict:
+def calculate_ats_score(resume_text: str, job_text: str) -> Dict:
 
-    # 1️⃣ Semantic similarity
+    resume_embedding = embed_text(resume_text)
+    job_embedding = embed_text(job_text)
+
     similarity = cosine_similarity(
         [resume_embedding],
         [job_embedding]
@@ -78,32 +85,31 @@ def calculate_ats_score(
 
     semantic_score = int(similarity * 100)
 
-    # 2️⃣ Normalize
     base_score = (
         normalize_score(similarity)
         if ENABLE_NORMALIZATION
         else semantic_score
     )
 
-    breakdown = {
-        "semantic_match": semantic_score
-    }
-
     final_score = base_score
+    breakdown = {"semantic_match": semantic_score}
     missing_skills = []
+    strengths = []
 
-    # 3️⃣ Keyword boost
     if ENABLE_KEYWORD_BOOST:
         kb = keyword_boost(resume_text, job_text)
-        final_score += kb["boost"]
-        final_score = min(final_score, MAX_SCORE)
-
+        final_score = min(final_score + kb["boost"], MAX_SCORE)
         breakdown["keyword_boost"] = kb["boost"]
 
         if ENABLE_MISSING_SKILLS:
             missing_skills = kb["missing"][:5]
 
-    # 4️⃣ Interpretation
+        if kb["boost"] > 0:
+            strengths.append("Relevant technical skills detected")
+
+    if semantic_score >= 60:
+        strengths.append("Strong role and experience alignment")
+
     if final_score >= 80:
         interpretation = "Strong ATS match. Resume aligns well with job requirements."
     elif final_score >= 60:
@@ -112,12 +118,6 @@ def calculate_ats_score(
         interpretation = "Moderate ATS match. Resume lacks some key skills."
     else:
         interpretation = "Low ATS match. Resume is missing several core requirements."
-
-    strengths = []
-    if semantic_score >= 60:
-        strengths.append("Strong role and experience alignment")
-    if ENABLE_KEYWORD_BOOST and breakdown.get("keyword_boost", 0) > 0:
-        strengths.append("Relevant technical skills detected")
 
     return {
         "ats_score": final_score,
