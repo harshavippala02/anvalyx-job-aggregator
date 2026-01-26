@@ -1,7 +1,6 @@
 import requests
 from typing import List, Dict
 from datetime import datetime
-from dateutil import parser
 
 # ---------------- CONFIG ----------------
 
@@ -34,7 +33,7 @@ def parse_datetime(dt_str: str):
     if not dt_str:
         return None
     try:
-        return parser.parse(dt_str)
+        return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
     except Exception:
         return None
 
