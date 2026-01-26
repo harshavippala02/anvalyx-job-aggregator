@@ -1,145 +1,159 @@
 import requests
-from typing import List
+import re
 from datetime import datetime
-from database import Job, get_db
+from sqlalchemy.orm import Session
+
+from database import SessionLocal, Job
 
 # ---------------- CONFIG ----------------
 
 GREENHOUSE_COMPANIES = [
-    "airbnb",
-    "stripe",
-    "coinbase",
+    "snowflakecomputing",
     "databricks",
-    "snowflake",
-    "mongodb",
+    "stripe",
+    "airbnb",
+    "linkedin",
+    "dropbox",
     "asana",
-    "notion",
-    "figma",
-    "openai",
-    "plaid",
-    "robinhood",
-    "shopify",
-    "twilio",
-    "zoom"
+    "coinbase",
+    "roblox",
+    "atlassian",
 ]
 
-DATA_ROLE_KEYWORDS = [
+ALLOWED_ROLES = [
     "data analyst",
     "business analyst",
-    "analytics",
+    "analytics engineer",
     "bi analyst",
-    "reporting",
-    "insights",
-    "data scientist",
-    "machine learning",
-    "ml engineer",
-    "analytics engineer"
+    "product analyst",
 ]
 
-EXCLUDED_SENIORITY_KEYWORDS = [
-    "director",
-    "head",
-    "vp",
-    "vice president",
-    "principal",
-    "staff",
-    "lead",
-    "manager"
+EXCLUDED_KEYWORDS = [
+    "intern",
+    "internship",
+    "student",
+    "phd",
+    "research",
 ]
 
-# ---------------- FILTER HELPERS ----------------
+US_KEYWORDS = [
+    "united states",
+    "usa",
+    "us",
+    "remote - us",
+    "remote (us)",
+    "remote, us",
+]
 
-def is_data_role(title: str) -> bool:
-    title_lower = title.lower()
-    return any(keyword in title_lower for keyword in DATA_ROLE_KEYWORDS)
+# ---------------- HELPERS ----------------
 
-def is_us_job(location: str | None) -> bool:
-    if not location:
-        return False
+def normalize_title(title: str) -> str:
+    title = title.lower()
+    title = re.sub(r"\b(level|lvl)\b", "", title)
+    title = re.sub(r"\b(i|ii|iii|iv|v|\d+)\b", "", title)
+    return title.strip()
 
-    loc = location.lower()
-    return (
-        "united states" in loc
-        or ("remote" in loc and ("us" in loc or "united states" in loc))
-    )
 
-def is_allowed_seniority(title: str) -> bool:
-    t = title.lower()
-    return not any(word in t for word in EXCLUDED_SENIORITY_KEYWORDS)
+def is_allowed_role(title: str) -> bool:
+    title = normalize_title(title)
+    return any(role in title for role in ALLOWED_ROLES)
 
-# ---------------- MAIN FETCH FUNCTION ----------------
+
+def is_excluded(title: str) -> bool:
+    title = title.lower()
+    return any(word in title for word in EXCLUDED_KEYWORDS)
+
+
+def is_us_location(location: str) -> bool:
+    location = location.lower()
+    return any(key in location for key in US_KEYWORDS)
+
+
+def extract_location(job: dict) -> str:
+    if job.get("location") and job["location"].get("name"):
+        return job["location"]["name"]
+    return ""
+
+
+def parse_posted_date(job: dict):
+    try:
+        return datetime.strptime(job["updated_at"], "%Y-%m-%dT%H:%M:%S.%fZ")
+    except Exception:
+        return datetime.utcnow()
+
+
+# ---------------- MAIN INGESTION ----------------
 
 def fetch_greenhouse_jobs():
-    db = next(get_db())
+    db: Session = SessionLocal()
 
-    total = 0
-    skipped_role = 0
-    skipped_location = 0
-    skipped_seniority = 0
-    inserted = 0
+    total = skipped_role = skipped_location = skipped_excluded = inserted = 0
 
     for company in GREENHOUSE_COMPANIES:
         try:
             url = f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs?content=true"
-            response = requests.get(url, timeout=15)
-            response.raise_for_status()
-            jobs = response.json().get("jobs", [])
+            resp = requests.get(url, timeout=15)
+
+            if resp.status_code != 200:
+                print(f"❌ Greenhouse fetch failed for {company}: {resp.status_code}")
+                continue
+
+            jobs = resp.json().get("jobs", [])
+            if not jobs:
+                continue
 
             for job in jobs:
                 total += 1
 
-                title = job.get("title", "")
-                location = job.get("location", {}).get("name", "")
-                job_url = job.get("absolute_url", "")
-                description = job.get("content", "")
-
-                # 1️⃣ Role filter
-                if not is_data_role(title):
+                title = job.get("title", "").strip()
+                if not title:
                     skipped_role += 1
                     continue
 
-                # 2️⃣ USA-only filter
-                if not is_us_job(location):
+                if is_excluded(title):
+                    skipped_excluded += 1
+                    continue
+
+                if not is_allowed_role(title):
+                    skipped_role += 1
+                    continue
+
+                location = extract_location(job)
+                if not is_us_location(location):
                     skipped_location += 1
                     continue
 
-                # 3️⃣ Seniority filter
-                if not is_allowed_seniority(title):
-                    skipped_seniority += 1
+                job_url = job.get("absolute_url")
+                if not job_url:
                     continue
 
-                # 4️⃣ Deduplication
-                exists = (
-                    db.query(Job)
-                    .filter(Job.source == "greenhouse", Job.url == job_url)
-                    .first()
-                )
-                if exists:
+                # Dedup by URL
+                if db.query(Job).filter(Job.url == job_url).first():
                     continue
 
                 new_job = Job(
                     title=title,
-                    company=company,
+                    company=company.replace("-", " ").title(),
                     location=location,
-                    description=description,
                     url=job_url,
                     source="greenhouse",
-                    created_at=datetime.utcnow(),
+                    posted_at=parse_posted_date(job),
                 )
 
                 db.add(new_job)
                 inserted += 1
 
-            db.commit()
-
         except Exception as e:
-            print(f"❌ Greenhouse fetch failed for {company}: {e}")
+            print(f"❌ Greenhouse error for {company}: {e}")
+
+    db.commit()
+    db.close()
 
     print(
         f"✅ Greenhouse summary | "
         f"total={total}, "
         f"skipped_role={skipped_role}, "
         f"skipped_location={skipped_location}, "
-        f"skipped_seniority={skipped_seniority}, "
+        f"skipped_excluded={skipped_excluded}, "
         f"inserted={inserted}"
     )
