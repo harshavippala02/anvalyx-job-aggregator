@@ -28,6 +28,7 @@ from database import (
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
 from backend.jobs.greenhouse_client import fetch_greenhouse_jobs
+from backend.jobs.lever_client import fetch_lever_jobs
 
 # 👉 IMPORT ATS ROUTER (IMPORTANT)
 from backend.ats.ats import router as ats_router
@@ -61,6 +62,15 @@ def refresh_jobs():
         print("✅ Greenhouse refreshed")
     except Exception as e:
         print("❌ Greenhouse failed:", e)
+    
+    # Lever (secondary ATS source)
+    try:
+        lever_jobs = fetch_lever_jobs()
+        save_jobs(lever_jobs)
+        print("✅ Lever refreshed")
+    except Exception as e:
+        print("❌ Lever failed:", e)
+
 
     # Adzuna (temporary – allow to fail silently)
     try:
