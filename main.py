@@ -46,22 +46,29 @@ app.include_router(ats_router)
 scheduler = BackgroundScheduler()
 
 def refresh_jobs():
+    # USAJobs (primary – must never fail the whole cycle)
+    try:
+        usajobs = fetch_usajobs()
+        save_jobs(usajobs)
+        print("✅ USAJobs refreshed")
+    except Exception as e:
+        print("❌ USAJobs failed:", e)
+
+    # Greenhouse (primary ATS source)
+    try:
+        greenhouse_jobs = fetch_greenhouse_jobs()
+        save_jobs(greenhouse_jobs)
+        print("✅ Greenhouse refreshed")
+    except Exception as e:
+        print("❌ Greenhouse failed:", e)
+
+    # Adzuna (temporary – allow to fail silently)
     try:
         adzuna_jobs = fetch_adzuna_jobs()
         save_jobs(adzuna_jobs)
-
-        usajobs = fetch_usajobs()
-        save_jobs(usajobs)
-
-        greenhouse_jobs = fetch_greenhouse_jobs()
-        save_jobs(greenhouse_jobs)
-
-        print("✅ Jobs refreshed successfully")
-
+        print("⚠️ Adzuna refreshed")
     except Exception as e:
-        print("❌ Job refresh failed:", e)
-
-scheduler.add_job(refresh_jobs, "interval", hours=1)
+        print("⚠️ Adzuna skipped (trial/quota issue)")
 
 # --------------------------------------------------
 # Startup
