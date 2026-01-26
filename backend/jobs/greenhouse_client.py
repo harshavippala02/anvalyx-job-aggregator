@@ -1,10 +1,9 @@
 import requests
-from datetime import datetime
 from typing import List, Dict
+from datetime import datetime
+from dateutil import parser
 
-# -----------------------------
-# CONFIG
-# -----------------------------
+# ---------------- CONFIG ----------------
 
 GREENHOUSE_COMPANIES = [
     "stripe",
@@ -13,32 +12,37 @@ GREENHOUSE_COMPANIES = [
     "airbnb",
 ]
 
-GREENHOUSE_API_TEMPLATE = (
-    "https://boards-api.greenhouse.io/v1/boards/{company}/jobs?content=true"
-)
-
-# Data / Analytics keywords
 DATA_KEYWORDS = [
     "data",
     "analyst",
     "analytics",
     "business intelligence",
     "bi",
+    "sql",
     "machine learning",
     "ml",
-    "ai",
-    "insights",
+    "scientist",
+    "engineer",
 ]
 
-HEADERS = {
-    "User-Agent": "Anvalyx-Job-Aggregator"
-}
+BASE_URL = "https://boards-api.greenhouse.io/v1/boards"
 
-# -----------------------------
-# HELPERS
-# -----------------------------
+
+# ---------------- HELPERS ----------------
+
+def parse_datetime(dt_str: str):
+    if not dt_str:
+        return None
+    try:
+        return parser.parse(dt_str)
+    except Exception:
+        return None
+
 
 def is_data_role(title: str) -> bool:
+    if not title:
+        return False
+
     title = title.lower()
     return any(keyword in title for keyword in DATA_KEYWORDS)
 
@@ -55,45 +59,32 @@ def normalize_job(job: Dict, company: str) -> Dict:
     }
 
 
-
-def parse_datetime(value: str):
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-# -----------------------------
-# MAIN INGESTION
-# -----------------------------
+# ---------------- MAIN FETCH ----------------
 
 def fetch_greenhouse_jobs() -> List[Dict]:
-    """
-    Fetch and normalize data-focused jobs from Greenhouse boards
-    """
     all_jobs: List[Dict] = []
+    total_kept = 0
 
     for company in GREENHOUSE_COMPANIES:
-        url = GREENHOUSE_API_TEMPLATE.format(company=company)
+        url = f"{BASE_URL}/{company}/jobs?content=true"
 
         try:
-            response = requests.get(url, headers=HEADERS, timeout=20)
-            response.raise_for_status()
-            payload = response.json()
-
-            jobs = payload.get("jobs", [])
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            jobs = data.get("jobs", [])
 
             for job in jobs:
                 title = job.get("title", "")
-                if not title or not is_data_role(title):
+                if not is_data_role(title):
                     continue
 
                 normalized = normalize_job(job, company)
                 all_jobs.append(normalized)
+                total_kept += 1
 
         except Exception as e:
             print(f"❌ Greenhouse fetch failed for {company}: {e}")
 
-    print(f"✅ Greenhouse fetched {len(all_jobs)} data jobs")
+    print(f"✅ Greenhouse fetched {total_kept} data jobs")
     return all_jobs
