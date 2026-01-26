@@ -1,89 +1,145 @@
 import requests
-from typing import List, Dict
+from typing import List
 from datetime import datetime
+from database import Job, get_db
 
 # ---------------- CONFIG ----------------
 
 GREENHOUSE_COMPANIES = [
-    "stripe",
-    "databricks",
-    "coinbase",
     "airbnb",
+    "stripe",
+    "coinbase",
+    "databricks",
+    "snowflake",
+    "mongodb",
+    "asana",
+    "notion",
+    "figma",
+    "openai",
+    "plaid",
+    "robinhood",
+    "shopify",
+    "twilio",
+    "zoom"
 ]
 
-DATA_KEYWORDS = [
-    "data",
-    "analyst",
+DATA_ROLE_KEYWORDS = [
+    "data analyst",
+    "business analyst",
     "analytics",
-    "business intelligence",
-    "bi",
-    "sql",
+    "bi analyst",
+    "reporting",
+    "insights",
+    "data scientist",
     "machine learning",
-    "ml",
-    "scientist",
-    "engineer",
+    "ml engineer",
+    "analytics engineer"
 ]
 
-BASE_URL = "https://boards-api.greenhouse.io/v1/boards"
+EXCLUDED_SENIORITY_KEYWORDS = [
+    "director",
+    "head",
+    "vp",
+    "vice president",
+    "principal",
+    "staff",
+    "lead",
+    "manager"
+]
 
-
-# ---------------- HELPERS ----------------
-
-def parse_datetime(dt_str: str):
-    if not dt_str:
-        return None
-    try:
-        return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
+# ---------------- FILTER HELPERS ----------------
 
 def is_data_role(title: str) -> bool:
-    if not title:
+    title_lower = title.lower()
+    return any(keyword in title_lower for keyword in DATA_ROLE_KEYWORDS)
+
+def is_us_job(location: str | None) -> bool:
+    if not location:
         return False
 
-    title = title.lower()
-    return any(keyword in title for keyword in DATA_KEYWORDS)
+    loc = location.lower()
+    return (
+        "united states" in loc
+        or ("remote" in loc and ("us" in loc or "united states" in loc))
+    )
 
+def is_allowed_seniority(title: str) -> bool:
+    t = title.lower()
+    return not any(word in t for word in EXCLUDED_SENIORITY_KEYWORDS)
 
-def normalize_job(job: Dict, company: str) -> Dict:
-    return {
-        "external_id": f"greenhouse-{company}-{job.get('id')}",
-        "title": job.get("title"),
-        "company": company.title(),
-        "location": job.get("location", {}).get("name"),
-        "url": job.get("absolute_url"),
-        "source": "greenhouse",
-        "posted_at": parse_datetime(job.get("updated_at")),
-    }
+# ---------------- MAIN FETCH FUNCTION ----------------
 
+def fetch_greenhouse_jobs():
+    db = next(get_db())
 
-# ---------------- MAIN FETCH ----------------
-
-def fetch_greenhouse_jobs() -> List[Dict]:
-    all_jobs: List[Dict] = []
-    total_kept = 0
+    total = 0
+    skipped_role = 0
+    skipped_location = 0
+    skipped_seniority = 0
+    inserted = 0
 
     for company in GREENHOUSE_COMPANIES:
-        url = f"{BASE_URL}/{company}/jobs?content=true"
-
         try:
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            jobs = data.get("jobs", [])
+            url = f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs?content=true"
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            jobs = response.json().get("jobs", [])
 
             for job in jobs:
+                total += 1
+
                 title = job.get("title", "")
+                location = job.get("location", {}).get("name", "")
+                job_url = job.get("absolute_url", "")
+                description = job.get("content", "")
+
+                # 1️⃣ Role filter
                 if not is_data_role(title):
+                    skipped_role += 1
                     continue
 
-                normalized = normalize_job(job, company)
-                all_jobs.append(normalized)
-                total_kept += 1
+                # 2️⃣ USA-only filter
+                if not is_us_job(location):
+                    skipped_location += 1
+                    continue
+
+                # 3️⃣ Seniority filter
+                if not is_allowed_seniority(title):
+                    skipped_seniority += 1
+                    continue
+
+                # 4️⃣ Deduplication
+                exists = (
+                    db.query(Job)
+                    .filter(Job.source == "greenhouse", Job.url == job_url)
+                    .first()
+                )
+                if exists:
+                    continue
+
+                new_job = Job(
+                    title=title,
+                    company=company,
+                    location=location,
+                    description=description,
+                    url=job_url,
+                    source="greenhouse",
+                    created_at=datetime.utcnow(),
+                )
+
+                db.add(new_job)
+                inserted += 1
+
+            db.commit()
 
         except Exception as e:
             print(f"❌ Greenhouse fetch failed for {company}: {e}")
 
-    print(f"✅ Greenhouse fetched {total_kept} data jobs")
-    return all_jobs
+    print(
+        f"✅ Greenhouse summary | "
+        f"total={total}, "
+        f"skipped_role={skipped_role}, "
+        f"skipped_location={skipped_location}, "
+        f"skipped_seniority={skipped_seniority}, "
+        f"inserted={inserted}"
+    )
