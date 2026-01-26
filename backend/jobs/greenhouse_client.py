@@ -8,7 +8,6 @@ from typing import List, Dict
 
 GREENHOUSE_COMPANIES = [
     "stripe",
-    "snowflakecomputing",
     "databricks",
     "coinbase",
     "airbnb",
@@ -45,19 +44,16 @@ def is_data_role(title: str) -> bool:
 
 
 def normalize_job(job: Dict, company: str) -> Dict:
-    """
-    Convert Greenhouse job JSON into your internal Job format
-    """
     return {
         "external_id": f"greenhouse-{company}-{job.get('id')}",
         "title": job.get("title"),
         "company": company.title(),
         "location": job.get("location", {}).get("name"),
-        "raw_description": job.get("content"),
         "url": job.get("absolute_url"),
         "source": "greenhouse",
         "posted_at": parse_datetime(job.get("updated_at")),
     }
+
 
 
 def parse_datetime(value: str):
