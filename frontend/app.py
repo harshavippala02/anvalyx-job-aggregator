@@ -16,9 +16,129 @@ st.set_page_config(
     layout="wide"
 )
 
-# ---------- HEADER ----------
-st.title("💼 Anvalyx")
-st.caption("AI-Powered Job Aggregator + ATS Match")
+# ---------- CUSTOM CSS ----------
+st.markdown("""
+<style>
+
+.stApp{
+    background: linear-gradient(180deg,#020617,#020617,#020617);
+    color:white;
+}
+
+/* hide streamlit stuff */
+#MainMenu {visibility:hidden;}
+footer {visibility:hidden;}
+header {visibility:hidden;}
+
+/* hero */
+.hero-title{
+    font-size:48px;
+    font-weight:700;
+    text-align:center;
+    margin-top:20px;
+}
+
+.hero-sub{
+    text-align:center;
+    color:#94a3b8;
+    font-size:18px;
+}
+
+/* job card */
+.job-card{
+    background:#0f172a;
+    padding:25px;
+    border-radius:12px;
+    margin-bottom:20px;
+    border:1px solid #1e293b;
+}
+
+.job-title{
+    font-size:22px;
+    font-weight:600;
+}
+
+.job-meta{
+    color:#94a3b8;
+    font-size:14px;
+}
+
+/* buttons */
+.stButton>button{
+    background:#2563eb;
+    color:white;
+    border:none;
+    border-radius:8px;
+    padding:8px 16px;
+}
+
+.stButton>button:hover{
+    background:#1d4ed8;
+}
+
+/* stats cards */
+.metric-card{
+    background:#0f172a;
+    padding:20px;
+    border-radius:12px;
+    text-align:center;
+    border:1px solid #1e293b;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# ---------- HERO ----------
+st.markdown(
+"""
+<div class="hero-title">
+Find Your Next Data Analytics Role
+</div>
+
+<div class="hero-sub">
+AI-powered job aggregator with ATS match scoring
+</div>
+""",
+unsafe_allow_html=True
+)
+
+# ---------- STATS ----------
+col1,col2,col3 = st.columns(3)
+
+with col1:
+    st.markdown(
+    """
+    <div class="metric-card">
+    <h2>2400+</h2>
+    Active Listings
+    </div>
+    """,
+    unsafe_allow_html=True
+    )
+
+with col2:
+    st.markdown(
+    """
+    <div class="metric-card">
+    <h2>380+</h2>
+    Companies Hiring
+    </div>
+    """,
+    unsafe_allow_html=True
+    )
+
+with col3:
+    st.markdown(
+    """
+    <div class="metric-card">
+    <h2>60%</h2>
+    Remote Friendly
+    </div>
+    """,
+    unsafe_allow_html=True
+    )
+
+st.write("")
 
 # ---------- SIDEBAR ----------
 st.sidebar.title("Navigation")
@@ -46,7 +166,7 @@ def format_posted(raw):
     except:
         return raw
 
-# ---------- RESUME ----------
+# ---------- RESUME UPLOAD ----------
 st.sidebar.subheader("Upload Resume")
 
 uploaded_file = st.sidebar.file_uploader(
@@ -87,12 +207,25 @@ if uploaded_file:
 # ---------- JOB CARD ----------
 def render_job_card(job):
 
-    col1, col2 = st.columns([4,1])
+    st.markdown('<div class="job-card">', unsafe_allow_html=True)
+
+    col1,col2 = st.columns([5,1])
 
     with col1:
-        st.subheader(job["title"])
-        st.write(f"{job['company']} • {job['location']}")
-        st.caption(f"{job['source']} | Posted {format_posted(job.get('posted'))}")
+        st.markdown(
+            f'<div class="job-title">{job["title"]}</div>',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            f'<div class="job-meta">{job["company"]} • {job["location"]}</div>',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            f'<div class="job-meta">{job["source"]} | Posted {format_posted(job.get("posted"))}</div>',
+            unsafe_allow_html=True
+        )
 
     with col2:
         if job.get("apply_url"):
@@ -120,7 +253,7 @@ def render_job_card(job):
                 for g in data["gaps"]:
                     st.write(f"• {g}")
 
-    st.divider()
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------- JOBS PAGE ----------
 if page == "Jobs":
@@ -128,12 +261,12 @@ if page == "Jobs":
     fresh_jobs = fetch_jobs("/jobs/fresh")
     older_jobs = fetch_jobs("/jobs/older")
 
-    st.header("Fresh Jobs")
+    st.subheader("Fresh Jobs")
 
     for job in fresh_jobs:
         render_job_card(job)
 
-    st.header("Older Jobs")
+    st.subheader("Older Jobs")
 
     for job in older_jobs:
         render_job_card(job)
@@ -143,7 +276,10 @@ if page == "ATS Checker":
 
     st.subheader("Manual Job Description")
 
-    job_text = st.text_area("Paste Job Description", height=250)
+    job_text = st.text_area(
+        "Paste Job Description",
+        height=250
+    )
 
     if st.button("Run ATS Analysis"):
 
