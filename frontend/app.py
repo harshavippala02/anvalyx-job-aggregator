@@ -1,7 +1,8 @@
+```python
 import streamlit as st
 import requests
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from docx import Document
 import pdfplumber
 
@@ -16,142 +17,94 @@ st.set_page_config(
     layout="wide"
 )
 
+# ---------- PAGE STATE ----------
+if "page" not in st.session_state:
+    st.session_state.page = "home"
+
+if "filter_days" not in st.session_state:
+    st.session_state.filter_days = 1
+
 # ---------- CUSTOM CSS ----------
 st.markdown("""
 <style>
 
 .stApp{
-    background: linear-gradient(180deg,#020617,#020617,#020617);
-    color:white;
+background:#020617;
+color:white;
 }
 
-/* hide streamlit stuff */
-#MainMenu {visibility:hidden;}
-footer {visibility:hidden;}
-header {visibility:hidden;}
-
-/* hero */
 .hero-title{
-    font-size:48px;
-    font-weight:700;
-    text-align:center;
-    margin-top:20px;
+font-size:56px;
+font-weight:700;
+text-align:center;
+margin-top:140px;
 }
 
 .hero-sub{
-    text-align:center;
-    color:#94a3b8;
-    font-size:18px;
+text-align:center;
+font-size:20px;
+color:#94a3b8;
+margin-bottom:40px;
 }
 
-/* job card */
+.navbar{
+display:flex;
+justify-content:space-between;
+align-items:center;
+padding:18px 40px;
+border-bottom:1px solid #1e293b;
+}
+
+.logo{
+font-size:22px;
+font-weight:700;
+}
+
 .job-card{
-    background:#0f172a;
-    padding:25px;
-    border-radius:12px;
-    margin-bottom:20px;
-    border:1px solid #1e293b;
-}
-
-.job-title{
-    font-size:22px;
-    font-weight:600;
-}
-
-.job-meta{
-    color:#94a3b8;
-    font-size:14px;
-}
-
-/* buttons */
-.stButton>button{
-    background:#2563eb;
-    color:white;
-    border:none;
-    border-radius:8px;
-    padding:8px 16px;
-}
-
-.stButton>button:hover{
-    background:#1d4ed8;
-}
-
-/* stats cards */
-.metric-card{
-    background:#0f172a;
-    padding:20px;
-    border-radius:12px;
-    text-align:center;
-    border:1px solid #1e293b;
+background:#0f172a;
+padding:20px;
+border-radius:12px;
+margin-bottom:20px;
+border:1px solid #1e293b;
 }
 
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- HERO ----------
-st.markdown(
-"""
-<div class="hero-title">
-Find Your Next Data Analytics Role
-</div>
-
-<div class="hero-sub">
-AI-powered job aggregator with ATS match scoring
-</div>
-""",
-unsafe_allow_html=True
-)
-
-# ---------- STATS ----------
-col1,col2,col3 = st.columns(3)
+# ---------- NAVBAR ----------
+col1,col2,col3,col4,col5,col6 = st.columns([2,1,1,1,1,1])
 
 with col1:
-    st.markdown(
-    """
-    <div class="metric-card">
-    <h2>2400+</h2>
-    Active Listings
-    </div>
-    """,
-    unsafe_allow_html=True
-    )
+    st.markdown("### Anvalyx")
 
 with col2:
-    st.markdown(
-    """
-    <div class="metric-card">
-    <h2>380+</h2>
-    Companies Hiring
-    </div>
-    """,
-    unsafe_allow_html=True
-    )
+    if st.button("Jobs"):
+        st.session_state.page = "jobs"
+        st.rerun()
 
 with col3:
-    st.markdown(
-    """
-    <div class="metric-card">
-    <h2>60%</h2>
-    Remote Friendly
-    </div>
-    """,
-    unsafe_allow_html=True
-    )
+    if st.button("Companies"):
+        st.info("Companies page coming soon")
 
-st.write("")
+with col4:
+    if st.button("Resume"):
+        st.session_state.page = "resume"
+        st.rerun()
 
-# ---------- SIDEBAR ----------
-st.sidebar.title("Navigation")
+with col5:
+    if st.button("Login"):
+        st.info("Login coming soon")
 
-page = st.sidebar.radio(
-    "Go to",
-    ["Jobs", "ATS Checker"]
-)
+with col6:
+    if st.button("Sign Up"):
+        st.info("Signup coming soon")
+
+st.divider()
 
 # ---------- HELPERS ----------
-def fetch_jobs(endpoint):
+def fetch_jobs():
     try:
-        res = requests.get(f"{BACKEND_BASE}{endpoint}", timeout=20)
+        res = requests.get(f"{BACKEND_BASE}/jobs/fresh", timeout=20)
         if res.status_code == 200:
             return res.json()
     except:
@@ -160,49 +113,24 @@ def fetch_jobs(endpoint):
 
 def format_posted(raw):
     if not raw:
-        return "Unknown"
+        return None
     try:
-        return datetime.fromisoformat(raw).date().isoformat()
+        return datetime.fromisoformat(raw)
     except:
-        return raw
+        return None
 
-# ---------- RESUME UPLOAD ----------
-st.sidebar.subheader("Upload Resume")
+def filter_jobs(jobs, days):
+    filtered = []
+    now = datetime.utcnow()
 
-uploaded_file = st.sidebar.file_uploader(
-    "Upload resume",
-    type=["pdf", "docx", "txt"]
-)
+    for job in jobs:
+        posted = format_posted(job.get("posted"))
+        if posted:
+            diff = now - posted
+            if diff <= timedelta(days=days):
+                filtered.append(job)
 
-def parse_docx(file):
-    doc = Document(file)
-    return "\n".join([p.text for p in doc.paragraphs])
-
-def parse_pdf(file):
-    text = ""
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            if page.extract_text():
-                text += page.extract_text()
-    return text
-
-def parse_txt(file):
-    return file.read().decode()
-
-if uploaded_file:
-    if uploaded_file.name.endswith(".docx"):
-        resume_text = parse_docx(uploaded_file)
-    elif uploaded_file.name.endswith(".pdf"):
-        resume_text = parse_pdf(uploaded_file)
-    else:
-        resume_text = parse_txt(uploaded_file)
-
-    if st.sidebar.button("Save Resume"):
-        requests.post(
-            f"{BACKEND_BASE}/resume",
-            json={"resume_text": resume_text}
-        )
-        st.sidebar.success("Resume saved")
+    return filtered
 
 # ---------- JOB CARD ----------
 def render_job_card(job):
@@ -212,20 +140,9 @@ def render_job_card(job):
     col1,col2 = st.columns([5,1])
 
     with col1:
-        st.markdown(
-            f'<div class="job-title">{job["title"]}</div>',
-            unsafe_allow_html=True
-        )
-
-        st.markdown(
-            f'<div class="job-meta">{job["company"]} • {job["location"]}</div>',
-            unsafe_allow_html=True
-        )
-
-        st.markdown(
-            f'<div class="job-meta">{job["source"]} | Posted {format_posted(job.get("posted"))}</div>',
-            unsafe_allow_html=True
-        )
+        st.subheader(job["title"])
+        st.write(f"{job['company']} • {job['location']}")
+        st.caption(f"{job['source']} | Posted {job.get('posted','Unknown')}")
 
     with col2:
         if job.get("apply_url"):
@@ -255,51 +172,109 @@ def render_job_card(job):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ---------- JOBS PAGE ----------
-if page == "Jobs":
+# ---------- SIDEBAR RESUME ----------
+st.sidebar.subheader("Upload Resume")
 
-    fresh_jobs = fetch_jobs("/jobs/fresh")
-    older_jobs = fetch_jobs("/jobs/older")
+uploaded_file = st.sidebar.file_uploader(
+    "Upload resume",
+    type=["pdf", "docx", "txt"]
+)
 
-    st.subheader("Fresh Jobs")
+def parse_docx(file):
+    doc = Document(file)
+    return "\n".join([p.text for p in doc.paragraphs])
 
-    for job in fresh_jobs:
-        render_job_card(job)
+def parse_pdf(file):
+    text = ""
+    with pdfplumber.open(file) as pdf:
+        for page in pdf.pages:
+            if page.extract_text():
+                text += page.extract_text()
+    return text
 
-    st.subheader("Older Jobs")
+def parse_txt(file):
+    return file.read().decode()
 
-    for job in older_jobs:
-        render_job_card(job)
+if uploaded_file:
 
-# ---------- ATS PAGE ----------
-if page == "ATS Checker":
+    if uploaded_file.name.endswith(".docx"):
+        resume_text = parse_docx(uploaded_file)
 
-    st.subheader("Manual Job Description")
+    elif uploaded_file.name.endswith(".pdf"):
+        resume_text = parse_pdf(uploaded_file)
 
-    job_text = st.text_area(
-        "Paste Job Description",
-        height=250
-    )
+    else:
+        resume_text = parse_txt(uploaded_file)
 
-    if st.button("Run ATS Analysis"):
+    if st.sidebar.button("Save Resume"):
 
-        res = requests.post(
-            f"{BACKEND_BASE}/ats/score",
-            json={"job_description": job_text}
+        requests.post(
+            f"{BACKEND_BASE}/resume",
+            json={"resume_text": resume_text}
         )
 
-        if res.status_code == 200:
+        st.sidebar.success("Resume saved")
 
-            data = res.json()
+# ---------- LANDING PAGE ----------
+if st.session_state.page == "home":
 
-            st.metric("ATS Score", f"{data['score']}%")
+    st.markdown("""
+    <div class="hero-title">
+    Find Your Next Data Analytics Role
+    </div>
 
-            if data.get("strengths"):
-                st.success("Strengths")
-                for s in data["strengths"]:
-                    st.write(f"• {s}")
+    <div class="hero-sub">
+    AI-powered job aggregator with ATS match scoring
+    </div>
+    """, unsafe_allow_html=True)
 
-            if data.get("gaps"):
-                st.warning("Skill Gaps")
-                for g in data["gaps"]:
-                    st.write(f"• {g}")
+    col1,col2,col3 = st.columns([2,1,2])
+
+    with col2:
+        if st.button("Browse Jobs"):
+            st.session_state.page = "jobs"
+            st.rerun()
+
+# ---------- JOBS PAGE ----------
+if st.session_state.page == "jobs":
+
+    st.title("Data Analytics Jobs")
+
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+
+    if c1.button("24 Hours"):
+        st.session_state.filter_days = 1
+
+    if c2.button("3 Days"):
+        st.session_state.filter_days = 3
+
+    if c3.button("5 Days"):
+        st.session_state.filter_days = 5
+
+    if c4.button("7 Days"):
+        st.session_state.filter_days = 7
+
+    if c5.button("10 Days"):
+        st.session_state.filter_days = 10
+
+    if c6.button("30 Days"):
+        st.session_state.filter_days = 30
+
+    st.divider()
+
+    jobs = fetch_jobs()
+
+    filtered_jobs = filter_jobs(
+        jobs,
+        st.session_state.filter_days
+    )
+
+    for job in filtered_jobs:
+        render_job_card(job)
+
+    st.write("")
+
+    if st.button("← Back to Home"):
+        st.session_state.page = "home"
+        st.rerun()
+```
