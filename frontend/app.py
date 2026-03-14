@@ -276,4 +276,3 @@ if st.session_state.page == "jobs":
     if st.button("← Back to Home"):
         st.session_state.page = "home"
         st.rerun()
-```
