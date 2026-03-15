@@ -23,15 +23,39 @@ if "page" not in st.session_state:
 if "filter_days" not in st.session_state:
     st.session_state.filter_days = 1
 
+
 # ---------- CUSTOM CSS ----------
 st.markdown("""
 <style>
 
+/* MAIN APP */
 .stApp{
 background:#020617;
 color:white;
 }
 
+/* FIX SIDEBAR POSITION */
+section[data-testid="stSidebar"]{
+margin-top:70px;
+}
+
+/* NAVBAR BUTTON STYLE */
+.stButton > button{
+background:#0f172a;
+color:white;
+border:1px solid #1e293b;
+padding:8px 18px;
+border-radius:8px;
+font-weight:500;
+transition:0.2s;
+}
+
+.stButton > button:hover{
+background:#1e293b;
+border:1px solid #334155;
+}
+
+/* HERO TITLE */
 .hero-title{
 font-size:56px;
 font-weight:700;
@@ -39,6 +63,7 @@ text-align:center;
 margin-top:140px;
 }
 
+/* HERO SUBTITLE */
 .hero-sub{
 text-align:center;
 font-size:20px;
@@ -46,19 +71,7 @@ color:#94a3b8;
 margin-bottom:40px;
 }
 
-.navbar{
-display:flex;
-justify-content:space-between;
-align-items:center;
-padding:18px 40px;
-border-bottom:1px solid #1e293b;
-}
-
-.logo{
-font-size:22px;
-font-weight:700;
-}
-
+/* JOB CARD */
 .job-card{
 background:#0f172a;
 padding:20px;
@@ -67,8 +80,23 @@ margin-bottom:20px;
 border:1px solid #1e293b;
 }
 
+/* APPLY BUTTON */
+.stLinkButton > a{
+background:#2563eb;
+color:white;
+padding:8px 14px;
+border-radius:8px;
+text-decoration:none;
+font-weight:500;
+}
+
+.stLinkButton > a:hover{
+background:#1d4ed8;
+}
+
 </style>
 """, unsafe_allow_html=True)
+
 
 # ---------- NAVBAR ----------
 col1,col2,col3,col4,col5,col6 = st.columns([2,1,1,1,1,1])
@@ -100,6 +128,7 @@ with col6:
 
 st.divider()
 
+
 # ---------- HELPERS ----------
 def fetch_jobs():
     try:
@@ -130,6 +159,7 @@ def filter_jobs(jobs, days):
                 filtered.append(job)
 
     return filtered
+
 
 # ---------- JOB CARD ----------
 def render_job_card(job):
@@ -170,6 +200,7 @@ def render_job_card(job):
                     st.write(f"• {g}")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
 
 # ---------- SIDEBAR RESUME ----------
 st.sidebar.subheader("Upload Resume")
@@ -214,6 +245,7 @@ if uploaded_file:
 
         st.sidebar.success("Resume saved")
 
+
 # ---------- LANDING PAGE ----------
 if st.session_state.page == "home":
 
@@ -233,6 +265,7 @@ if st.session_state.page == "home":
         if st.button("Browse Jobs"):
             st.session_state.page = "jobs"
             st.rerun()
+
 
 # ---------- JOBS PAGE ----------
 if st.session_state.page == "jobs":
