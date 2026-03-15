@@ -140,11 +140,13 @@ def health_head():
 def serialize_job(j: Job):
     return {
         "id": j.id,
+        "external_id": j.external_id,
         "title": j.title,
         "company": j.company,
         "location": j.location,
         "apply_url": j.url,
         "source": j.source,
+        "description": j.description,
         "posted": j.posted_at.isoformat() if j.posted_at else None
     }
 

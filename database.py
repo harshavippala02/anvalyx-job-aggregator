@@ -5,7 +5,8 @@ from sqlalchemy import (
     String,
     Text,
     DateTime,
-    Boolean
+    Boolean,
+    UniqueConstraint
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
@@ -37,14 +38,18 @@ ACTIVE_SOURCES = ["usajobs", "adzuna"]
 # -----------------------------
 class Job(Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        UniqueConstraint("external_id", "source", name="uq_job_external_source"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    external_id = Column(String, index=True)
+    external_id = Column(String, index=True, nullable=False)
     title = Column(String)
     company = Column(String)
     location = Column(String)
     url = Column(String)
-    source = Column(String, index=True)
+    source = Column(String, index=True, nullable=False)
+    description = Column(Text, nullable=True)
     posted_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -81,11 +86,14 @@ def save_jobs(jobs):
     skipped = 0
 
     try:
-        for job in jobs or []:
-            if not isinstance(job, dict):
-                skipped += 1
-                continue
+        jobs = [j for j in (jobs or []) if isinstance(j, dict)]
 
+        if not jobs:
+            print("💾 save_jobs complete | inserted=0, skipped=0")
+            return {"inserted": 0, "skipped": 0}
+
+        valid_jobs = []
+        for job in jobs:
             external_id = job.get("external_id")
             source = job.get("source")
 
@@ -93,16 +101,31 @@ def save_jobs(jobs):
                 skipped += 1
                 continue
 
-            exists = db.query(Job).filter(
-                Job.external_id == external_id,
-                Job.source == source
-            ).first()
+            valid_jobs.append(job)
 
-            if exists:
+        if not valid_jobs:
+            print(f"💾 save_jobs complete | inserted=0, skipped={skipped}")
+            return {"inserted": 0, "skipped": skipped}
+
+        sources = list({j["source"] for j in valid_jobs})
+        external_ids = list({j["external_id"] for j in valid_jobs})
+
+        existing_rows = db.query(Job.external_id, Job.source).filter(
+            Job.source.in_(sources),
+            Job.external_id.in_(external_ids)
+        ).all()
+
+        existing_keys = {(row.external_id, row.source) for row in existing_rows}
+
+        for job in valid_jobs:
+            key = (job["external_id"], job["source"])
+
+            if key in existing_keys:
                 skipped += 1
                 continue
 
             db.add(Job(**job))
+            existing_keys.add(key)
             inserted += 1
 
         db.commit()
@@ -146,13 +169,15 @@ def get_job_counts():
         adzuna = db.query(Job).filter(Job.source == "adzuna").count()
         greenhouse = db.query(Job).filter(Job.source == "greenhouse").count()
         lever = db.query(Job).filter(Job.source == "lever").count()
+        apify = db.query(Job).filter(Job.source == "apify").count()
 
         return {
             "all_jobs": total,
             "usajobs": usajobs,
             "adzuna": adzuna,
             "greenhouse": greenhouse,
-            "lever": lever
+            "lever": lever,
+            "apify": apify
         }
     finally:
         db.close()
