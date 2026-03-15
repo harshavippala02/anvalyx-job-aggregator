@@ -16,7 +16,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# ---------------- PAGE STATE ----------------
+# ---------------- SESSION STATE ----------------
 
 if "page" not in st.session_state:
     st.session_state.page = "home"
@@ -24,6 +24,8 @@ if "page" not in st.session_state:
 if "filter_days" not in st.session_state:
     st.session_state.filter_days = 1
 
+if "search_query" not in st.session_state:
+    st.session_state.search_query = ""
 
 # ---------------- CUSTOM CSS ----------------
 
@@ -105,10 +107,9 @@ text-align:center;
 </style>
 """, unsafe_allow_html=True)
 
-
 # ---------------- NAVBAR ----------------
 
-col1,col2,col3,col4,col5,col6 = st.columns([2,1,1,1,1,1])
+col1,col2,col3,col4,col5 = st.columns([3,1,1,1,1])
 
 with col1:
     st.markdown("### Anvalyx")
@@ -128,15 +129,18 @@ with col4:
         st.rerun()
 
 with col5:
-    if st.button("Login"):
-        st.info("Login coming soon")
 
-with col6:
-    if st.button("Sign Up"):
-        st.info("Signup coming soon")
+    cA,cB = st.columns(2)
+
+    with cA:
+        if st.button("Login"):
+            st.info("Login coming soon")
+
+    with cB:
+        if st.button("Sign Up"):
+            st.info("Signup coming soon")
 
 st.divider()
-
 
 # ---------------- HELPERS ----------------
 
@@ -160,17 +164,44 @@ def format_posted(raw):
 
 
 def filter_jobs(jobs, days):
-    filtered = []
-    now = datetime.utcnow()
+
+    filtered=[]
+    now=datetime.utcnow()
 
     for job in jobs:
-        posted = format_posted(job.get("posted"))
+
+        posted=format_posted(job.get("posted"))
+
         if posted:
-            diff = now - posted
+
+            diff=now-posted
+
             if diff <= timedelta(days=days):
                 filtered.append(job)
 
+        else:
+            filtered.append(job)
+
     return filtered
+
+
+def search_jobs(jobs, query):
+
+    if not query:
+        return jobs
+
+    query=query.lower()
+
+    results=[]
+
+    for job in jobs:
+
+        text=f"{job.get('title','')} {job.get('company','')} {job.get('location','')}"
+
+        if query in text.lower():
+            results.append(job)
+
+    return results
 
 
 # ---------------- JOB CARD ----------------
@@ -192,15 +223,15 @@ def render_job_card(job):
 
     if st.button("Check ATS Score", key=f"ats{job['id']}"):
 
-        res = requests.get(
+        res=requests.get(
             f"{BACKEND_BASE}/ats/score/job/{job['id']}"
         )
 
-        if res.status_code == 200:
+        if res.status_code==200:
 
-            data = res.json()
+            data=res.json()
 
-            st.metric("ATS Score", f"{data['score']}%")
+            st.metric("ATS Score",f"{data['score']}%")
 
             if data.get("strengths"):
                 st.success("Strengths")
@@ -218,16 +249,21 @@ def render_job_card(job):
 # ---------------- RESUME PARSING ----------------
 
 def parse_docx(file):
-    doc = Document(file)
+    doc=Document(file)
     return "\n".join([p.text for p in doc.paragraphs])
 
 
 def parse_pdf(file):
-    text = ""
+
+    text=""
+
     with pdfplumber.open(file) as pdf:
+
         for page in pdf.pages:
+
             if page.extract_text():
-                text += page.extract_text()
+                text+=page.extract_text()
+
     return text
 
 
@@ -235,9 +271,9 @@ def parse_txt(file):
     return file.read().decode()
 
 
-# ---------------- LANDING PAGE ----------------
+# ---------------- HOME PAGE ----------------
 
-if st.session_state.page == "home":
+if st.session_state.page=="home":
 
     st.markdown("""
     <div class="hero-title">
@@ -249,92 +285,106 @@ if st.session_state.page == "home":
     </div>
     """, unsafe_allow_html=True)
 
-    col1,col2,col3 = st.columns([2,1,2])
+    col1,col2,col3=st.columns([2,1,2])
 
     with col2:
+
         if st.button("Browse Jobs"):
-            st.session_state.page = "jobs"
+            st.session_state.page="jobs"
             st.rerun()
 
 
 # ---------------- JOBS PAGE ----------------
 
-elif st.session_state.page == "jobs":
+elif st.session_state.page=="jobs":
 
     st.title("Data Analytics Jobs")
 
-    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    c1,c2,c3,c4,c5,c6=st.columns(6)
 
     if c1.button("24 Hours"):
-        st.session_state.filter_days = 1
+        st.session_state.filter_days=2
 
     if c2.button("3 Days"):
-        st.session_state.filter_days = 3
+        st.session_state.filter_days=3
 
     if c3.button("5 Days"):
-        st.session_state.filter_days = 5
+        st.session_state.filter_days=5
 
     if c4.button("7 Days"):
-        st.session_state.filter_days = 7
+        st.session_state.filter_days=7
 
     if c5.button("10 Days"):
-        st.session_state.filter_days = 10
+        st.session_state.filter_days=10
 
     if c6.button("30 Days"):
-        st.session_state.filter_days = 30
+        st.session_state.filter_days=30
 
     st.divider()
 
-    jobs = fetch_jobs()
+    # SEARCH BAR
+    st.session_state.search_query = st.text_input(
+        "Search Jobs",
+        placeholder="Search Data Analyst, SQL, Python..."
+    )
 
-    filtered_jobs = filter_jobs(
+    st.write("")
+
+    jobs=fetch_jobs()
+
+    filtered_jobs=filter_jobs(
         jobs,
         st.session_state.filter_days
+    )
+
+    filtered_jobs=search_jobs(
+        filtered_jobs,
+        st.session_state.search_query
     )
 
     for job in filtered_jobs:
         render_job_card(job)
 
     if st.button("← Back to Home"):
-        st.session_state.page = "home"
+        st.session_state.page="home"
         st.rerun()
 
 
 # ---------------- RESUME PAGE ----------------
 
-elif st.session_state.page == "resume":
+elif st.session_state.page=="resume":
 
     st.title("Upload Your Resume")
 
     st.markdown('<div class="upload-box">', unsafe_allow_html=True)
 
-    uploaded_file = st.file_uploader(
+    uploaded_file=st.file_uploader(
         "Upload resume",
-        type=["pdf", "docx", "txt"]
+        type=["pdf","docx","txt"]
     )
 
     if uploaded_file:
 
         if uploaded_file.name.endswith(".docx"):
-            resume_text = parse_docx(uploaded_file)
+            resume_text=parse_docx(uploaded_file)
 
         elif uploaded_file.name.endswith(".pdf"):
-            resume_text = parse_pdf(uploaded_file)
+            resume_text=parse_pdf(uploaded_file)
 
         else:
-            resume_text = parse_txt(uploaded_file)
+            resume_text=parse_txt(uploaded_file)
 
         if st.button("Save Resume"):
 
             requests.post(
                 f"{BACKEND_BASE}/resume",
-                json={"resume_text": resume_text}
+                json={"resume_text":resume_text}
             )
 
             st.success("Resume saved successfully")
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     if st.button("← Back to Home"):
-        st.session_state.page = "home"
+        st.session_state.page="home"
         st.rerun()
