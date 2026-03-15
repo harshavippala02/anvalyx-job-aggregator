@@ -16,7 +16,8 @@ st.set_page_config(
     layout="wide"
 )
 
-# ---------- PAGE STATE ----------
+# ---------------- PAGE STATE ----------------
+
 if "page" not in st.session_state:
     st.session_state.page = "home"
 
@@ -24,63 +25,60 @@ if "filter_days" not in st.session_state:
     st.session_state.filter_days = 1
 
 
-# ---------- CUSTOM CSS ----------
+# ---------------- CUSTOM CSS ----------------
+
 st.markdown("""
 <style>
 
-/* MAIN APP */
 .stApp{
-background:#020617;
-color:white;
+background:#f8fafc;
+color:#1f2937;
 }
 
-/* FIX SIDEBAR POSITION */
-section[data-testid="stSidebar"]{
-margin-top:70px;
-}
+/* NAVBAR BUTTONS */
 
-/* NAVBAR BUTTON STYLE */
 .stButton > button{
-background:#0f172a;
-color:white;
-border:1px solid #1e293b;
+background:white;
+border:1px solid #e5e7eb;
 padding:8px 18px;
 border-radius:8px;
 font-weight:500;
-transition:0.2s;
+color:#374151;
 }
 
 .stButton > button:hover{
-background:#1e293b;
-border:1px solid #334155;
+background:#f3f4f6;
 }
 
-/* HERO TITLE */
+/* HERO */
+
 .hero-title{
-font-size:56px;
+font-size:48px;
 font-weight:700;
 text-align:center;
-margin-top:140px;
+margin-top:120px;
 }
 
-/* HERO SUBTITLE */
 .hero-sub{
 text-align:center;
 font-size:20px;
-color:#94a3b8;
+color:#6b7280;
 margin-bottom:40px;
 }
 
 /* JOB CARD */
+
 .job-card{
-background:#0f172a;
+background:white;
 padding:20px;
 border-radius:12px;
 margin-bottom:20px;
-border:1px solid #1e293b;
+border:1px solid #e5e7eb;
+box-shadow:0 4px 10px rgba(0,0,0,0.04);
 }
 
 /* APPLY BUTTON */
+
 .stLinkButton > a{
 background:#2563eb;
 color:white;
@@ -94,11 +92,22 @@ font-weight:500;
 background:#1d4ed8;
 }
 
+/* UPLOAD BOX */
+
+.upload-box{
+border:2px dashed #e5e7eb;
+padding:40px;
+border-radius:12px;
+background:white;
+text-align:center;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
 
-# ---------- NAVBAR ----------
+# ---------------- NAVBAR ----------------
+
 col1,col2,col3,col4,col5,col6 = st.columns([2,1,1,1,1,1])
 
 with col1:
@@ -129,7 +138,8 @@ with col6:
 st.divider()
 
 
-# ---------- HELPERS ----------
+# ---------------- HELPERS ----------------
+
 def fetch_jobs():
     try:
         res = requests.get(f"{BACKEND_BASE}/jobs/fresh", timeout=20)
@@ -139,6 +149,7 @@ def fetch_jobs():
         st.error("Backend not reachable")
     return []
 
+
 def format_posted(raw):
     if not raw:
         return None
@@ -146,6 +157,7 @@ def format_posted(raw):
         return datetime.fromisoformat(raw)
     except:
         return None
+
 
 def filter_jobs(jobs, days):
     filtered = []
@@ -161,7 +173,8 @@ def filter_jobs(jobs, days):
     return filtered
 
 
-# ---------- JOB CARD ----------
+# ---------------- JOB CARD ----------------
+
 def render_job_card(job):
 
     st.markdown('<div class="job-card">', unsafe_allow_html=True)
@@ -202,17 +215,12 @@ def render_job_card(job):
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ---------- SIDEBAR RESUME ----------
-st.sidebar.subheader("Upload Resume")
-
-uploaded_file = st.sidebar.file_uploader(
-    "Upload resume",
-    type=["pdf", "docx", "txt"]
-)
+# ---------------- RESUME PARSING ----------------
 
 def parse_docx(file):
     doc = Document(file)
     return "\n".join([p.text for p in doc.paragraphs])
+
 
 def parse_pdf(file):
     text = ""
@@ -222,31 +230,13 @@ def parse_pdf(file):
                 text += page.extract_text()
     return text
 
+
 def parse_txt(file):
     return file.read().decode()
 
-if uploaded_file:
 
-    if uploaded_file.name.endswith(".docx"):
-        resume_text = parse_docx(uploaded_file)
+# ---------------- LANDING PAGE ----------------
 
-    elif uploaded_file.name.endswith(".pdf"):
-        resume_text = parse_pdf(uploaded_file)
-
-    else:
-        resume_text = parse_txt(uploaded_file)
-
-    if st.sidebar.button("Save Resume"):
-
-        requests.post(
-            f"{BACKEND_BASE}/resume",
-            json={"resume_text": resume_text}
-        )
-
-        st.sidebar.success("Resume saved")
-
-
-# ---------- LANDING PAGE ----------
 if st.session_state.page == "home":
 
     st.markdown("""
@@ -267,8 +257,9 @@ if st.session_state.page == "home":
             st.rerun()
 
 
-# ---------- JOBS PAGE ----------
-if st.session_state.page == "jobs":
+# ---------------- JOBS PAGE ----------------
+
+elif st.session_state.page == "jobs":
 
     st.title("Data Analytics Jobs")
 
@@ -304,7 +295,45 @@ if st.session_state.page == "jobs":
     for job in filtered_jobs:
         render_job_card(job)
 
-    st.write("")
+    if st.button("← Back to Home"):
+        st.session_state.page = "home"
+        st.rerun()
+
+
+# ---------------- RESUME PAGE ----------------
+
+elif st.session_state.page == "resume":
+
+    st.title("Upload Your Resume")
+
+    st.markdown('<div class="upload-box">', unsafe_allow_html=True)
+
+    uploaded_file = st.file_uploader(
+        "Upload resume",
+        type=["pdf", "docx", "txt"]
+    )
+
+    if uploaded_file:
+
+        if uploaded_file.name.endswith(".docx"):
+            resume_text = parse_docx(uploaded_file)
+
+        elif uploaded_file.name.endswith(".pdf"):
+            resume_text = parse_pdf(uploaded_file)
+
+        else:
+            resume_text = parse_txt(uploaded_file)
+
+        if st.button("Save Resume"):
+
+            requests.post(
+                f"{BACKEND_BASE}/resume",
+                json={"resume_text": resume_text}
+            )
+
+            st.success("Resume saved successfully")
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if st.button("← Back to Home"):
         st.session_state.page = "home"
