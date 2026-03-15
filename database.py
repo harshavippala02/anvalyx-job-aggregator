@@ -7,8 +7,7 @@ from sqlalchemy import (
     DateTime,
     Boolean
 )
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from dotenv import load_dotenv
 import os
@@ -29,6 +28,10 @@ SessionLocal = sessionmaker(
 
 Base = declarative_base()
 
+# Only these sources are active right now
+ACTIVE_SOURCES = ["usajobs", "adzuna"]
+
+
 # -----------------------------
 # Jobs table
 # -----------------------------
@@ -41,8 +44,9 @@ class Job(Base):
     company = Column(String)
     location = Column(String)
     url = Column(String)
-    source = Column(String)
+    source = Column(String, index=True)
     posted_at = Column(DateTime, default=datetime.utcnow)
+
 
 # -----------------------------
 # Resume table (single active resume)
@@ -60,35 +64,99 @@ class UserResume(Base):
         onupdate=datetime.utcnow
     )
 
+
 # -----------------------------
 # DB initialization
 # -----------------------------
 def init_db():
     Base.metadata.create_all(bind=engine)
 
+
 # -----------------------------
 # Job helpers
 # -----------------------------
 def save_jobs(jobs):
     db = SessionLocal()
+    inserted = 0
+    skipped = 0
 
-    for job in jobs:
-        exists = db.query(Job).filter(
-            Job.external_id == job["external_id"],
-            Job.source == job["source"]
-        ).first()
+    try:
+        for job in jobs or []:
+            if not isinstance(job, dict):
+                skipped += 1
+                continue
 
-        if not exists:
+            external_id = job.get("external_id")
+            source = job.get("source")
+
+            if not external_id or not source:
+                skipped += 1
+                continue
+
+            exists = db.query(Job).filter(
+                Job.external_id == external_id,
+                Job.source == source
+            ).first()
+
+            if exists:
+                skipped += 1
+                continue
+
             db.add(Job(**job))
+            inserted += 1
 
-    db.commit()
-    db.close()
+        db.commit()
+        print(f"💾 save_jobs complete | inserted={inserted}, skipped={skipped}")
+        return {"inserted": inserted, "skipped": skipped}
+
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
 
 def get_all_jobs():
     db = SessionLocal()
-    jobs = db.query(Job).order_by(Job.posted_at.desc()).all()
-    db.close()
-    return jobs
+    try:
+        jobs = db.query(Job).order_by(Job.posted_at.desc()).all()
+        return jobs
+    finally:
+        db.close()
+
+
+def clear_all_jobs():
+    db = SessionLocal()
+    try:
+        deleted = db.query(Job).delete()
+        db.commit()
+        return deleted
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def get_job_counts():
+    db = SessionLocal()
+    try:
+        total = db.query(Job).count()
+        usajobs = db.query(Job).filter(Job.source == "usajobs").count()
+        adzuna = db.query(Job).filter(Job.source == "adzuna").count()
+        greenhouse = db.query(Job).filter(Job.source == "greenhouse").count()
+        lever = db.query(Job).filter(Job.source == "lever").count()
+
+        return {
+            "all_jobs": total,
+            "usajobs": usajobs,
+            "adzuna": adzuna,
+            "greenhouse": greenhouse,
+            "lever": lever
+        }
+    finally:
+        db.close()
+
 
 # -----------------------------
 # Resume helpers
@@ -100,36 +168,43 @@ def save_resume(resume_text: str):
     """
     db = SessionLocal()
 
-    # Deactivate previous resumes
-    db.query(UserResume).update({UserResume.is_active: False})
+    try:
+        db.query(UserResume).update({UserResume.is_active: False})
 
-    resume = UserResume(
-        resume_text=resume_text,
-        is_active=True
-    )
+        resume = UserResume(
+            resume_text=resume_text,
+            is_active=True
+        )
 
-    db.add(resume)
-    db.commit()
-    db.refresh(resume)
-    db.close()
+        db.add(resume)
+        db.commit()
+        db.refresh(resume)
+        return resume
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
-    return resume
 
 def get_active_resume():
     """
     Returns the currently active resume.
     """
     db = SessionLocal()
-    resume = (
-        db.query(UserResume)
-        .filter(UserResume.is_active == True)
-        .first()
-    )
-    db.close()
-    return resume
+    try:
+        resume = (
+            db.query(UserResume)
+            .filter(UserResume.is_active == True)
+            .first()
+        )
+        return resume
+    finally:
+        db.close()
+
 
 # -----------------------------
-# ✅ FastAPI DB dependency (MISSING PART)
+# FastAPI DB dependency
 # -----------------------------
 def get_db():
     """

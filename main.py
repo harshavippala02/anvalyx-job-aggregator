@@ -20,8 +20,11 @@ from database import (
     save_jobs,
     save_resume,
     get_active_resume,
+    clear_all_jobs,
+    get_job_counts,
     SessionLocal,
-    Job
+    Job,
+    ACTIVE_SOURCES
 )
 
 from adzuna_client import fetch_adzuna_jobs
@@ -40,6 +43,7 @@ app.include_router(ats_router)
 # --------------------------------------------------
 scheduler = BackgroundScheduler()
 
+
 # --------------------------------------------------
 # Refresh functions
 # --------------------------------------------------
@@ -47,8 +51,11 @@ def refresh_usajobs():
     print("🔄 USAJobs refresh started")
     try:
         jobs = fetch_usajobs() or []
-        save_jobs(jobs)
-        print(f"✅ USAJobs refreshed | fetched={len(jobs)}")
+        result = save_jobs(jobs)
+        print(
+            f"✅ USAJobs refreshed | fetched={len(jobs)} "
+            f"| inserted={result['inserted']} | skipped={result['skipped']}"
+        )
     except Exception as e:
         print(f"❌ USAJobs failed: {e}")
 
@@ -57,8 +64,11 @@ def refresh_adzuna():
     print("🔄 Adzuna refresh started")
     try:
         jobs = fetch_adzuna_jobs() or []
-        save_jobs(jobs)
-        print(f"✅ Adzuna refreshed | fetched={len(jobs)}")
+        result = save_jobs(jobs)
+        print(
+            f"✅ Adzuna refreshed | fetched={len(jobs)} "
+            f"| inserted={result['inserted']} | skipped={result['skipped']}"
+        )
     except Exception as e:
         print(f"⚠️ Adzuna skipped: {e}")
 
@@ -68,6 +78,7 @@ def refresh_all_sources():
     refresh_usajobs()
     refresh_adzuna()
     print("✅ Full refresh cycle finished")
+
 
 # --------------------------------------------------
 # Startup / Shutdown
@@ -106,12 +117,22 @@ def shutdown_event():
         scheduler.shutdown()
         print("🛑 Scheduler stopped")
 
+
 # --------------------------------------------------
 # Health
 # --------------------------------------------------
 @app.get("/")
 def health():
-    return {"status": "Anvalyx backend running"}
+    return {
+        "status": "Anvalyx backend running",
+        "active_sources": ACTIVE_SOURCES
+    }
+
+
+@app.head("/")
+def health_head():
+    return
+
 
 # --------------------------------------------------
 # Helpers
@@ -127,6 +148,7 @@ def serialize_job(j: Job):
         "posted": j.posted_at.isoformat() if j.posted_at else None
     }
 
+
 # --------------------------------------------------
 # Jobs API
 # --------------------------------------------------
@@ -137,6 +159,7 @@ def get_jobs():
         jobs = (
             db.query(Job)
             .filter(Job.posted_at.isnot(None))
+            .filter(Job.source.in_(ACTIVE_SOURCES))
             .order_by(Job.posted_at.desc())
             .all()
         )
@@ -155,6 +178,7 @@ def get_fresh_jobs():
             db.query(Job)
             .filter(Job.posted_at.isnot(None))
             .filter(Job.posted_at >= cutoff)
+            .filter(Job.source.in_(ACTIVE_SOURCES))
             .order_by(Job.posted_at.desc())
             .all()
         )
@@ -175,12 +199,48 @@ def get_older_jobs():
             .filter(Job.posted_at.isnot(None))
             .filter(Job.posted_at < end)
             .filter(Job.posted_at >= start)
+            .filter(Job.source.in_(ACTIVE_SOURCES))
             .order_by(Job.posted_at.desc())
             .all()
         )
         return [serialize_job(j) for j in jobs]
     finally:
         db.close()
+
+
+@app.get("/jobs/debug-counts")
+def debug_counts():
+    db: Session = SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=7)
+
+        fresh_jobs = (
+            db.query(Job)
+            .filter(Job.posted_at.isnot(None))
+            .filter(Job.posted_at >= cutoff)
+            .filter(Job.source.in_(ACTIVE_SOURCES))
+            .count()
+        )
+
+        counts = get_job_counts()
+        counts["fresh_jobs_active_sources"] = fresh_jobs
+        counts["active_sources"] = ACTIVE_SOURCES
+        return counts
+    finally:
+        db.close()
+
+
+# --------------------------------------------------
+# Admin API
+# --------------------------------------------------
+@app.delete("/admin/clear-jobs")
+def clear_jobs():
+    deleted = clear_all_jobs()
+    return {
+        "message": "All jobs cleared successfully",
+        "deleted_jobs": deleted
+    }
+
 
 # --------------------------------------------------
 # Resume API
