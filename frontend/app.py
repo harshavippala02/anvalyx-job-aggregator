@@ -1,9 +1,10 @@
-import streamlit as st
-import requests
 import os
 from datetime import datetime, timedelta
-from docx import Document
+
 import pdfplumber
+import requests
+import streamlit as st
+from docx import Document
 
 BACKEND_BASE = os.getenv(
     "BACKEND_BASE",
@@ -13,7 +14,8 @@ BACKEND_BASE = os.getenv(
 st.set_page_config(
     page_title="Anvalyx",
     page_icon="💼",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 # ---------------- SESSION STATE ----------------
@@ -22,7 +24,7 @@ if "page" not in st.session_state:
     st.session_state.page = "home"
 
 if "filter_days" not in st.session_state:
-    st.session_state.filter_days = 1
+    st.session_state.filter_days = 2
 
 if "search_query" not in st.session_state:
     st.session_state.search_query = ""
@@ -32,116 +34,148 @@ if "search_query" not in st.session_state:
 st.markdown("""
 <style>
 
-.stApp{
-background:#f8fafc;
-color:#1f2937;
+/* Hide Streamlit top-right menu / toolbar / footer / header */
+[data-testid="stToolbar"] {
+    display: none !important;
 }
 
-/* NAVBAR BUTTONS */
-
-.stButton > button{
-background:white;
-border:1px solid #e5e7eb;
-padding:8px 18px;
-border-radius:8px;
-font-weight:500;
-color:#374151;
-white-space:nowrap;
-min-width:110px;
+[data-testid="stDecoration"] {
+    display: none !important;
 }
 
-.stButton > button:hover{
-background:#f3f4f6;
+[data-testid="stStatusWidget"] {
+    display: none !important;
 }
 
-/* HERO */
-
-.hero-title{
-font-size:56px;
-font-weight:700;
-text-align:center;
-margin-top:160px;
+header {
+    display: none !important;
 }
 
-.hero-sub{
-text-align:center;
-font-size:22px;
-color:#6b7280;
-margin-bottom:40px;
+footer {
+    display: none !important;
 }
 
-/* JOB CARD */
-
-.job-card{
-background:white;
-padding:20px;
-border-radius:12px;
-margin-bottom:20px;
-border:1px solid #e5e7eb;
-box-shadow:0 4px 10px rgba(0,0,0,0.04);
+#MainMenu {
+    visibility: hidden;
 }
 
-/* APPLY BUTTON */
-
-.stLinkButton > a{
-background:#2563eb;
-color:white;
-padding:8px 14px;
-border-radius:8px;
-text-decoration:none;
-font-weight:500;
+/* Main app */
+.stApp {
+    background: #f8fafc;
+    color: #1f2937;
 }
 
-.stLinkButton > a:hover{
-background:#1d4ed8;
+/* Reduce default top padding */
+.block-container {
+    padding-top: 1.2rem !important;
+    padding-bottom: 2rem !important;
+    padding-left: 3rem !important;
+    padding-right: 3rem !important;
 }
 
-/* UPLOAD BOX */
-
-.upload-box{
-border:2px dashed #e5e7eb;
-padding:40px;
-border-radius:12px;
-background:white;
-text-align:center;
+/* Buttons */
+.stButton > button {
+    background: white;
+    border: 1px solid #e5e7eb;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-weight: 500;
+    color: #374151;
+    white-space: nowrap;
+    min-width: 110px;
+    height: 48px;
 }
 
+.stButton > button:hover {
+    background: #f3f4f6;
+    border-color: #d1d5db;
+    color: #111827;
+}
+
+/* Link button */
+.stLinkButton > a {
+    background: #2563eb;
+    color: white;
+    padding: 10px 16px;
+    border-radius: 10px;
+    text-decoration: none;
+    font-weight: 600;
+    display: inline-block;
+    text-align: center;
+}
+
+.stLinkButton > a:hover {
+    background: #1d4ed8;
+    color: white;
+}
+
+/* Navbar brand */
+.brand {
+    font-size: 34px;
+    font-weight: 700;
+    color: #1f2937;
+    margin-top: 4px;
+}
+
+/* Hero section */
+.hero-wrap {
+    min-height: 62vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.hero-inner {
+    text-align: center;
+    margin-top: -50px; /* moves hero slightly upward */
+}
+
+.hero-title {
+    font-size: 72px;
+    font-weight: 800;
+    line-height: 1.05;
+    color: #1f2937;
+    margin-bottom: 18px;
+}
+
+.hero-sub {
+    font-size: 22px;
+    color: #6b7280;
+    margin-bottom: 34px;
+}
+
+/* Job card */
+.job-card {
+    background: white;
+    padding: 22px;
+    border-radius: 14px;
+    margin-bottom: 18px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+/* Resume upload box */
+.upload-box {
+    border: 2px dashed #d1d5db;
+    padding: 42px;
+    border-radius: 14px;
+    background: white;
+    text-align: center;
+    margin-top: 18px;
+}
+
+/* Search box spacing */
+[data-testid="stTextInput"] {
+    margin-top: 0.3rem;
+}
+
+/* Cleaner divider spacing */
+hr {
+    margin-top: 1rem !important;
+    margin-bottom: 1.5rem !important;
+}
 </style>
 """, unsafe_allow_html=True)
-
-# ---------------- NAVBAR ----------------
-
-col1,col2,col3,col4,col5,col6,col7 = st.columns([2,1,1,1,1,1,1])
-
-with col1:
-    st.markdown("### Anvalyx")
-
-with col2:
-    if st.button("Jobs"):
-        st.session_state.page="jobs"
-        st.rerun()
-
-with col3:
-    if st.button("Companies"):
-        st.info("Companies page coming soon")
-
-with col4:
-    if st.button("Resume"):
-        st.session_state.page="resume"
-        st.rerun()
-
-with col5:
-    st.write("")
-
-with col6:
-    if st.button("Login"):
-        st.info("Login coming soon")
-
-with col7:
-    if st.button("Sign Up"):
-        st.info("Signup coming soon")
-
-st.divider()
 
 # ---------------- HELPERS ----------------
 
@@ -150,7 +184,7 @@ def fetch_jobs():
         res = requests.get(f"{BACKEND_BASE}/jobs/fresh", timeout=20)
         if res.status_code == 200:
             return res.json()
-    except:
+    except Exception:
         st.error("Backend not reachable")
     return []
 
@@ -159,27 +193,26 @@ def format_posted(raw):
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(raw)
-    except:
+        raw = raw.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt
+    except Exception:
         return None
 
 
 def filter_jobs(jobs, days):
-
-    filtered=[]
-    now=datetime.utcnow()
+    filtered = []
+    now = datetime.utcnow()
 
     for job in jobs:
-
-        posted=format_posted(job.get("posted"))
+        posted = format_posted(job.get("posted"))
 
         if posted:
-
-            diff=now-posted
-
+            diff = now - posted
             if diff <= timedelta(days=days):
                 filtered.append(job)
-
         else:
             filtered.append(job)
 
@@ -187,204 +220,222 @@ def filter_jobs(jobs, days):
 
 
 def search_jobs(jobs, query):
-
     if not query:
         return jobs
 
-    query=query.lower()
-
-    results=[]
+    query = query.lower().strip()
+    results = []
 
     for job in jobs:
+        haystack = " ".join([
+            str(job.get("title", "")),
+            str(job.get("company", "")),
+            str(job.get("location", "")),
+            str(job.get("source", ""))
+        ]).lower()
 
-        text=f"{job.get('title','')} {job.get('company','')} {job.get('location','')}"
-
-        if query in text.lower():
+        if query in haystack:
             results.append(job)
 
     return results
 
 
-# ---------------- JOB CARD ----------------
-
-def render_job_card(job):
-
-    st.markdown('<div class="job-card">', unsafe_allow_html=True)
-
-    col1,col2 = st.columns([5,1])
-
-    with col1:
-        st.subheader(job["title"])
-        st.write(f"{job['company']} • {job['location']}")
-        st.caption(f"{job['source']} | Posted {job.get('posted','Unknown')}")
-
-    with col2:
-        if job.get("apply_url"):
-            st.link_button("Apply", job["apply_url"])
-
-    if st.button("Check ATS Score", key=f"ats{job['id']}"):
-
-        res=requests.get(
-            f"{BACKEND_BASE}/ats/score/job/{job['id']}"
-        )
-
-        if res.status_code==200:
-
-            data=res.json()
-
-            st.metric("ATS Score",f"{data['score']}%")
-
-            if data.get("strengths"):
-                st.success("Strengths")
-                for s in data["strengths"]:
-                    st.write(f"• {s}")
-
-            if data.get("gaps"):
-                st.warning("Skill Gaps")
-                for g in data["gaps"]:
-                    st.write(f"• {g}")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ---------------- RESUME PARSING ----------------
-
 def parse_docx(file):
-    doc=Document(file)
-    return "\n".join([p.text for p in doc.paragraphs])
+    doc = Document(file)
+    return "\\n".join([p.text for p in doc.paragraphs])
 
 
 def parse_pdf(file):
-
-    text=""
-
+    text = ""
     with pdfplumber.open(file) as pdf:
-
         for page in pdf.pages:
-
-            if page.extract_text():
-                text+=page.extract_text()
-
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + "\\n"
     return text
 
 
 def parse_txt(file):
-    return file.read().decode()
+    return file.read().decode("utf-8", errors="ignore")
 
+
+def render_job_card(job):
+    st.markdown('<div class="job-card">', unsafe_allow_html=True)
+
+    col1, col2 = st.columns([6, 1])
+
+    with col1:
+        st.subheader(job.get("title", "Untitled Role"))
+        st.write(f"{job.get('company', 'Unknown Company')} • {job.get('location', 'Unknown Location')}")
+        st.caption(f"{job.get('source', 'Unknown Source')} | Posted {job.get('posted', 'Unknown')}")
+
+    with col2:
+        apply_url = job.get("apply_url")
+        if apply_url:
+            st.link_button("Apply", apply_url)
+
+    job_id = job.get("id", job.get("title", "job"))
+
+    if st.button("Check ATS Score", key=f"ats_{job_id}"):
+        try:
+            res = requests.get(f"{BACKEND_BASE}/ats/score/job/{job_id}", timeout=20)
+
+            if res.status_code == 200:
+                data = res.json()
+                st.metric("ATS Score", f"{data.get('score', 0)}%")
+
+                if data.get("strengths"):
+                    st.success("Strengths")
+                    for s in data["strengths"]:
+                        st.write(f"• {s}")
+
+                if data.get("gaps"):
+                    st.warning("Skill Gaps")
+                    for g in data["gaps"]:
+                        st.write(f"• {g}")
+            else:
+                st.warning("Could not fetch ATS score.")
+        except Exception:
+            st.warning("ATS service is not reachable right now.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------------- NAVBAR ----------------
+
+nav1, nav2, nav3, nav4, nav5, nav6, nav7 = st.columns([2.6, 1, 1.1, 1, 1.4, 1, 1])
+
+with nav1:
+    st.markdown('<div class="brand">Anvalyx</div>', unsafe_allow_html=True)
+
+with nav2:
+    if st.button("Jobs"):
+        st.session_state.page = "jobs"
+        st.rerun()
+
+with nav3:
+    if st.button("Companies"):
+        st.info("Companies page coming soon")
+
+with nav4:
+    if st.button("Resume"):
+        st.session_state.page = "resume"
+        st.rerun()
+
+with nav5:
+    st.write("")
+
+with nav6:
+    if st.button("Login"):
+        st.info("Login coming soon")
+
+with nav7:
+    if st.button("Sign Up"):
+        st.info("Signup coming soon")
+
+st.divider()
 
 # ---------------- HOME PAGE ----------------
 
-if st.session_state.page=="home":
-
+if st.session_state.page == "home":
     st.markdown("""
-    <div class="hero-title">
-    Find Your Next Data Analytics Role
-    </div>
-
-    <div class="hero-sub">
-    AI-powered job aggregator with ATS match scoring
+    <div class="hero-wrap">
+        <div class="hero-inner">
+            <div class="hero-title">Find Your Next Data Analytics Role</div>
+            <div class="hero-sub">AI-powered job aggregator with ATS match scoring</div>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-    col1,col2,col3=st.columns([2,1,2])
-
-    with col2:
-
+    c1, c2, c3 = st.columns([2.2, 1, 2.2])
+    with c2:
         if st.button("Browse Jobs"):
-            st.session_state.page="jobs"
+            st.session_state.page = "jobs"
             st.rerun()
-
 
 # ---------------- JOBS PAGE ----------------
 
-elif st.session_state.page=="jobs":
-
+elif st.session_state.page == "jobs":
     st.title("Data Analytics Jobs")
 
-    c1,c2,c3,c4,c5,c6=st.columns(6)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
 
     if c1.button("24 Hours"):
-        st.session_state.filter_days=2
+        st.session_state.filter_days = 2
 
     if c2.button("3 Days"):
-        st.session_state.filter_days=3
+        st.session_state.filter_days = 3
 
     if c3.button("5 Days"):
-        st.session_state.filter_days=5
+        st.session_state.filter_days = 5
 
     if c4.button("7 Days"):
-        st.session_state.filter_days=7
+        st.session_state.filter_days = 7
 
     if c5.button("10 Days"):
-        st.session_state.filter_days=10
+        st.session_state.filter_days = 10
 
     if c6.button("30 Days"):
-        st.session_state.filter_days=30
+        st.session_state.filter_days = 30
 
     st.divider()
 
     st.session_state.search_query = st.text_input(
         "Search Jobs",
+        value=st.session_state.search_query,
         placeholder="Search Data Analyst, SQL, Python..."
     )
 
-    st.write("")
+    jobs = fetch_jobs()
+    filtered_jobs = filter_jobs(jobs, st.session_state.filter_days)
+    filtered_jobs = search_jobs(filtered_jobs, st.session_state.search_query)
 
-    jobs=fetch_jobs()
-
-    filtered_jobs=filter_jobs(
-        jobs,
-        st.session_state.filter_days
-    )
-
-    filtered_jobs=search_jobs(
-        filtered_jobs,
-        st.session_state.search_query
-    )
+    if not filtered_jobs:
+        st.info("No jobs found for this filter/search.")
 
     for job in filtered_jobs:
         render_job_card(job)
 
     if st.button("← Back to Home"):
-        st.session_state.page="home"
+        st.session_state.page = "home"
         st.rerun()
-
 
 # ---------------- RESUME PAGE ----------------
 
-elif st.session_state.page=="resume":
-
+elif st.session_state.page == "resume":
     st.title("Upload Your Resume")
 
     st.markdown('<div class="upload-box">', unsafe_allow_html=True)
 
-    uploaded_file=st.file_uploader(
+    uploaded_file = st.file_uploader(
         "Upload resume",
-        type=["pdf","docx","txt"]
+        type=["pdf", "docx", "txt"]
     )
 
     if uploaded_file:
-
         if uploaded_file.name.endswith(".docx"):
-            resume_text=parse_docx(uploaded_file)
-
+            resume_text = parse_docx(uploaded_file)
         elif uploaded_file.name.endswith(".pdf"):
-            resume_text=parse_pdf(uploaded_file)
-
+            resume_text = parse_pdf(uploaded_file)
         else:
-            resume_text=parse_txt(uploaded_file)
+            resume_text = parse_txt(uploaded_file)
 
         if st.button("Save Resume"):
+            try:
+                res = requests.post(
+                    f"{BACKEND_BASE}/resume",
+                    json={"resume_text": resume_text},
+                    timeout=30
+                )
 
-            requests.post(
-                f"{BACKEND_BASE}/resume",
-                json={"resume_text":resume_text}
-            )
-
-            st.success("Resume saved successfully")
+                if res.status_code in (200, 201):
+                    st.success("Resume saved successfully")
+                else:
+                    st.warning("Resume upload failed.")
+            except Exception:
+                st.warning("Resume service is not reachable right now.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
     if st.button("← Back to Home"):
-        st.session_state.page="home"
+        st.session_state.page = "home"
         st.rerun()
