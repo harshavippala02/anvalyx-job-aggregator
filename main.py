@@ -1,11 +1,10 @@
 from dotenv import load_dotenv
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-
 
 # --------------------------------------------------
 # ENV
@@ -27,18 +26,13 @@ from database import (
 
 from adzuna_client import fetch_adzuna_jobs
 from usajobs_client import fetch_usajobs
-from backend.jobs.greenhouse_client import fetch_greenhouse_jobs
-from backend.jobs.lever_client import fetch_lever_jobs
 
-# 👉 IMPORT ATS ROUTER (IMPORTANT)
 from backend.ats.ats import router as ats_router
 
 # --------------------------------------------------
 # App
 # --------------------------------------------------
 app = FastAPI(title="Anvalyx Backend")
-
-# Register ATS routes
 app.include_router(ats_router)
 
 # --------------------------------------------------
@@ -46,48 +40,71 @@ app.include_router(ats_router)
 # --------------------------------------------------
 scheduler = BackgroundScheduler()
 
-def refresh_jobs():
-    # USAJobs (primary – must never fail the whole cycle)
+# --------------------------------------------------
+# Refresh functions
+# --------------------------------------------------
+def refresh_usajobs():
+    print("🔄 USAJobs refresh started")
     try:
-        usajobs = fetch_usajobs()
-        save_jobs(usajobs)
-        print("✅ USAJobs refreshed")
+        jobs = fetch_usajobs() or []
+        save_jobs(jobs)
+        print(f"✅ USAJobs refreshed | fetched={len(jobs)}")
     except Exception as e:
-        print("❌ USAJobs failed:", e)
-
-    # Greenhouse (primary ATS source)
-    try:
-        greenhouse_jobs = fetch_greenhouse_jobs()
-        save_jobs(greenhouse_jobs)
-        print("✅ Greenhouse refreshed")
-    except Exception as e:
-        print("❌ Greenhouse failed:", e)
-    
-    # Lever (secondary ATS source)
-    try:
-        lever_jobs = fetch_lever_jobs()
-        save_jobs(lever_jobs)
-        print("✅ Lever refreshed")
-    except Exception as e:
-        print("❌ Lever failed:", e)
+        print(f"❌ USAJobs failed: {e}")
 
 
-    # Adzuna (temporary – allow to fail silently)
+def refresh_adzuna():
+    print("🔄 Adzuna refresh started")
     try:
-        adzuna_jobs = fetch_adzuna_jobs()
-        save_jobs(adzuna_jobs)
-        print("⚠️ Adzuna refreshed")
+        jobs = fetch_adzuna_jobs() or []
+        save_jobs(jobs)
+        print(f"✅ Adzuna refreshed | fetched={len(jobs)}")
     except Exception as e:
-        print("⚠️ Adzuna skipped (trial/quota issue)")
+        print(f"⚠️ Adzuna skipped: {e}")
+
+
+def refresh_all_sources():
+    print("🚀 Full refresh cycle started")
+    refresh_usajobs()
+    refresh_adzuna()
+    print("✅ Full refresh cycle finished")
 
 # --------------------------------------------------
-# Startup
+# Startup / Shutdown
 # --------------------------------------------------
 @app.on_event("startup")
 def startup_event():
     init_db()
-    refresh_jobs()
+
+    # Run once immediately when the app starts
+    refresh_all_sources()
+
+    # Schedule each source separately
+    scheduler.add_job(
+        refresh_usajobs,
+        "interval",
+        hours=6,
+        id="refresh_usajobs",
+        replace_existing=True
+    )
+
+    scheduler.add_job(
+        refresh_adzuna,
+        "interval",
+        hours=2,
+        id="refresh_adzuna",
+        replace_existing=True
+    )
+
     scheduler.start()
+    print("✅ Scheduler started")
+
+
+@app.on_event("shutdown")
+def shutdown_event():
+    if scheduler.running:
+        scheduler.shutdown()
+        print("🛑 Scheduler stopped")
 
 # --------------------------------------------------
 # Health
@@ -107,7 +124,7 @@ def serialize_job(j: Job):
         "location": j.location,
         "apply_url": j.url,
         "source": j.source,
-        "posted": j.posted_at.strftime("%Y-%m-%d") if j.posted_at else None
+        "posted": j.posted_at.isoformat() if j.posted_at else None
     }
 
 # --------------------------------------------------
@@ -116,28 +133,35 @@ def serialize_job(j: Job):
 @app.get("/jobs")
 def get_jobs():
     db: Session = SessionLocal()
-    jobs = (
-        db.query(Job)
-        .filter(Job.posted_at.isnot(None))
-        .order_by(Job.posted_at.desc())
-        .all()
-    )
-    db.close()
-    return [serialize_job(j) for j in jobs]
+    try:
+        jobs = (
+            db.query(Job)
+            .filter(Job.posted_at.isnot(None))
+            .order_by(Job.posted_at.desc())
+            .all()
+        )
+        return [serialize_job(j) for j in jobs]
+    finally:
+        db.close()
+
 
 @app.get("/jobs/fresh")
 def get_fresh_jobs():
     db: Session = SessionLocal()
     cutoff = datetime.utcnow() - timedelta(days=7)
 
-    jobs = (
-        db.query(Job)
-        .filter(Job.posted_at >= cutoff)
-        .order_by(Job.posted_at.desc())
-        .all()
-    )
-    db.close()
-    return [serialize_job(j) for j in jobs]
+    try:
+        jobs = (
+            db.query(Job)
+            .filter(Job.posted_at.isnot(None))
+            .filter(Job.posted_at >= cutoff)
+            .order_by(Job.posted_at.desc())
+            .all()
+        )
+        return [serialize_job(j) for j in jobs]
+    finally:
+        db.close()
+
 
 @app.get("/jobs/older")
 def get_older_jobs():
@@ -145,14 +169,18 @@ def get_older_jobs():
     start = datetime.utcnow() - timedelta(days=30)
     end = datetime.utcnow() - timedelta(days=7)
 
-    jobs = (
-        db.query(Job)
-        .filter(Job.posted_at < end, Job.posted_at >= start)
-        .order_by(Job.posted_at.desc())
-        .all()
-    )
-    db.close()
-    return [serialize_job(j) for j in jobs]
+    try:
+        jobs = (
+            db.query(Job)
+            .filter(Job.posted_at.isnot(None))
+            .filter(Job.posted_at < end)
+            .filter(Job.posted_at >= start)
+            .order_by(Job.posted_at.desc())
+            .all()
+        )
+        return [serialize_job(j) for j in jobs]
+    finally:
+        db.close()
 
 # --------------------------------------------------
 # Resume API
@@ -160,14 +188,17 @@ def get_older_jobs():
 class ResumeRequest(BaseModel):
     resume_text: str
 
+
 @app.post("/resume")
 def upload_resume(payload: ResumeRequest):
     resume = save_resume(payload.resume_text)
     return {"message": "Resume saved", "resume_id": resume.id}
 
+
 @app.get("/resume")
 def fetch_resume():
     resume = get_active_resume()
+
     if not resume:
         return {"message": "No resume found"}
 
