@@ -46,6 +46,8 @@ padding:8px 18px;
 border-radius:8px;
 font-weight:500;
 color:#374151;
+white-space:nowrap;
+min-width:110px;
 }
 
 .stButton > button:hover{
@@ -55,15 +57,15 @@ background:#f3f4f6;
 /* HERO */
 
 .hero-title{
-font-size:48px;
+font-size:56px;
 font-weight:700;
 text-align:center;
-margin-top:120px;
+margin-top:160px;
 }
 
 .hero-sub{
 text-align:center;
-font-size:20px;
+font-size:22px;
 color:#6b7280;
 margin-bottom:40px;
 }
@@ -109,14 +111,14 @@ text-align:center;
 
 # ---------------- NAVBAR ----------------
 
-col1,col2,col3,col4,col5 = st.columns([3,1,1,1,1])
+col1,col2,col3,col4,col5,col6,col7 = st.columns([2,1,1,1,1,1,1])
 
 with col1:
     st.markdown("### Anvalyx")
 
 with col2:
     if st.button("Jobs"):
-        st.session_state.page = "jobs"
+        st.session_state.page="jobs"
         st.rerun()
 
 with col3:
@@ -125,20 +127,19 @@ with col3:
 
 with col4:
     if st.button("Resume"):
-        st.session_state.page = "resume"
+        st.session_state.page="resume"
         st.rerun()
 
 with col5:
+    st.write("")
 
-    cA,cB = st.columns(2)
+with col6:
+    if st.button("Login"):
+        st.info("Login coming soon")
 
-    with cA:
-        if st.button("Login"):
-            st.info("Login coming soon")
-
-    with cB:
-        if st.button("Sign Up"):
-            st.info("Signup coming soon")
+with col7:
+    if st.button("Sign Up"):
+        st.info("Signup coming soon")
 
 st.divider()
 
@@ -322,7 +323,6 @@ elif st.session_state.page=="jobs":
 
     st.divider()
 
-    # SEARCH BAR
     st.session_state.search_query = st.text_input(
         "Search Jobs",
         placeholder="Search Data Analyst, SQL, Python..."
