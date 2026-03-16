@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pdfplumber
 import requests
@@ -24,7 +24,7 @@ if "page" not in st.session_state:
     st.session_state.page = "home"
 
 if "filter_days" not in st.session_state:
-    st.session_state.filter_days = 2
+    st.session_state.filter_days = 1
 
 if "search_query" not in st.session_state:
     st.session_state.search_query = ""
@@ -127,7 +127,7 @@ footer {
 
 .hero-inner {
     text-align: center;
-    margin-top: -50px; /* moves hero slightly upward */
+    margin-top: -50px;
 }
 
 .hero-title {
@@ -179,70 +179,43 @@ hr {
 
 # ---------------- HELPERS ----------------
 
-def fetch_jobs():
+def fetch_jobs(days=1, search=""):
     try:
-        res = requests.get(f"{BACKEND_BASE}/jobs/fresh", timeout=20)
+        params = {
+            "days": days,
+            "limit": 100
+        }
+
+        if search and search.strip():
+            params["search"] = search.strip()
+
+        res = requests.get(f"{BACKEND_BASE}/jobs", params=params, timeout=20)
+
         if res.status_code == 200:
             return res.json()
+
+        st.warning(f"Jobs API returned {res.status_code}")
+        return []
     except Exception:
         st.error("Backend not reachable")
-    return []
+        return []
 
 
-def format_posted(raw):
+def format_posted_display(raw):
     if not raw:
-        return None
+        return "Unknown"
+
     try:
-        raw = raw.replace("Z", "+00:00")
+        raw = str(raw).replace("Z", "+00:00")
         dt = datetime.fromisoformat(raw)
-        if dt.tzinfo is not None:
-            dt = dt.replace(tzinfo=None)
-        return dt
+        return dt.strftime("%Y-%m-%d %H:%M")
     except Exception:
-        return None
-
-
-def filter_jobs(jobs, days):
-    filtered = []
-    now = datetime.utcnow()
-
-    for job in jobs:
-        posted = format_posted(job.get("posted"))
-
-        if posted:
-            diff = now - posted
-            if diff <= timedelta(days=days):
-                filtered.append(job)
-        else:
-            filtered.append(job)
-
-    return filtered
-
-
-def search_jobs(jobs, query):
-    if not query:
-        return jobs
-
-    query = query.lower().strip()
-    results = []
-
-    for job in jobs:
-        haystack = " ".join([
-            str(job.get("title", "")),
-            str(job.get("company", "")),
-            str(job.get("location", "")),
-            str(job.get("source", ""))
-        ]).lower()
-
-        if query in haystack:
-            results.append(job)
-
-    return results
+        return str(raw)
 
 
 def parse_docx(file):
     doc = Document(file)
-    return "\\n".join([p.text for p in doc.paragraphs])
+    return "\n".join([p.text for p in doc.paragraphs])
 
 
 def parse_pdf(file):
@@ -251,7 +224,7 @@ def parse_pdf(file):
         for page in pdf.pages:
             extracted = page.extract_text()
             if extracted:
-                text += extracted + "\\n"
+                text += extracted + "\n"
     return text
 
 
@@ -267,7 +240,9 @@ def render_job_card(job):
     with col1:
         st.subheader(job.get("title", "Untitled Role"))
         st.write(f"{job.get('company', 'Unknown Company')} • {job.get('location', 'Unknown Location')}")
-        st.caption(f"{job.get('source', 'Unknown Source')} | Posted {job.get('posted', 'Unknown')}")
+        st.caption(
+            f"{job.get('source', 'Unknown Source')} | Posted {format_posted_display(job.get('posted'))}"
+        )
 
     with col2:
         apply_url = job.get("apply_url")
@@ -359,40 +334,61 @@ elif st.session_state.page == "jobs":
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
 
-    if c1.button("24 Hours"):
-        st.session_state.filter_days = 2
+    with c1:
+        if st.button("24 Hours"):
+            st.session_state.filter_days = 1
+            st.rerun()
 
-    if c2.button("3 Days"):
-        st.session_state.filter_days = 3
+    with c2:
+        if st.button("3 Days"):
+            st.session_state.filter_days = 3
+            st.rerun()
 
-    if c3.button("5 Days"):
-        st.session_state.filter_days = 5
+    with c3:
+        if st.button("5 Days"):
+            st.session_state.filter_days = 5
+            st.rerun()
 
-    if c4.button("7 Days"):
-        st.session_state.filter_days = 7
+    with c4:
+        if st.button("7 Days"):
+            st.session_state.filter_days = 7
+            st.rerun()
 
-    if c5.button("10 Days"):
-        st.session_state.filter_days = 10
+    with c5:
+        if st.button("10 Days"):
+            st.session_state.filter_days = 10
+            st.rerun()
 
-    if c6.button("30 Days"):
-        st.session_state.filter_days = 30
+    with c6:
+        if st.button("30 Days"):
+            st.session_state.filter_days = 30
+            st.rerun()
 
     st.divider()
 
-    st.session_state.search_query = st.text_input(
+    search_value = st.text_input(
         "Search Jobs",
         value=st.session_state.search_query,
         placeholder="Search Data Analyst, SQL, Python..."
     )
 
-    jobs = fetch_jobs()
-    filtered_jobs = filter_jobs(jobs, st.session_state.filter_days)
-    filtered_jobs = search_jobs(filtered_jobs, st.session_state.search_query)
+    if search_value != st.session_state.search_query:
+        st.session_state.search_query = search_value
 
-    if not filtered_jobs:
+    jobs = fetch_jobs(
+        days=st.session_state.filter_days,
+        search=st.session_state.search_query
+    )
+
+    st.caption(
+        f"Showing jobs from the last {st.session_state.filter_days} day(s)"
+        + (f" matching '{st.session_state.search_query}'" if st.session_state.search_query.strip() else "")
+    )
+
+    if not jobs:
         st.info("No jobs found for this filter/search.")
 
-    for job in filtered_jobs:
+    for job in jobs:
         render_job_card(job)
 
     if st.button("← Back to Home"):
