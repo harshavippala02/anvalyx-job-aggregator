@@ -1,419 +1,419 @@
-from dotenv import load_dotenv
 import os
-from fastapi import FastAPI, Query
-from apscheduler.schedulers.background import BackgroundScheduler
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from sqlalchemy import or_
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# --------------------------------------------------
-# ENV
-# --------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+import pdfplumber
+import requests
+import streamlit as st
+from docx import Document
 
-# --------------------------------------------------
-# Internal imports
-# --------------------------------------------------
-from database import (
-    init_db,
-    save_jobs,
-    save_resume,
-    get_active_resume,
-    clear_all_jobs,
-    get_job_counts,
-    SessionLocal,
-    Job,
-    ACTIVE_SOURCES,
-    ensure_jobs_schema,
-    normalize_source_value,
+BACKEND_BASE = os.getenv(
+    "BACKEND_BASE",
+    "https://anvalyx-backend.onrender.com"
 )
 
-from adzuna_client import fetch_adzuna_jobs
-from usajobs_client import fetch_usajobs
+st.set_page_config(
+    page_title="Anvalyx",
+    page_icon="💼",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-from backend.ats.ats import router as ats_router
+# ---------------- SESSION STATE ----------------
 
-# --------------------------------------------------
-# App
-# --------------------------------------------------
-app = FastAPI(title="Anvalyx Backend")
-app.include_router(ats_router)
+if "page" not in st.session_state:
+    st.session_state.page = "home"
 
-# --------------------------------------------------
-# Scheduler
-# --------------------------------------------------
-scheduler = BackgroundScheduler()
+if "filter_days" not in st.session_state:
+    st.session_state.filter_days = 1
 
+if "search_query" not in st.session_state:
+    st.session_state.search_query = ""
 
-# --------------------------------------------------
-# Refresh functions
-# --------------------------------------------------
-def refresh_usajobs():
-    print("🔄 USAJobs refresh started")
+# ---------------- CUSTOM CSS ----------------
+
+st.markdown("""
+<style>
+[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stStatusWidget"] { display: none !important; }
+header { display: none !important; }
+footer { display: none !important; }
+#MainMenu { visibility: hidden; }
+
+.stApp {
+    background: #f8fafc;
+    color: #1f2937;
+}
+
+.block-container {
+    padding-top: 1.2rem !important;
+    padding-bottom: 2rem !important;
+    padding-left: 3rem !important;
+    padding-right: 3rem !important;
+}
+
+.stButton > button {
+    background: white;
+    border: 1px solid #e5e7eb;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-weight: 500;
+    color: #374151;
+    white-space: nowrap;
+    min-width: 110px;
+    height: 48px;
+}
+
+.stButton > button:hover {
+    background: #f3f4f6;
+    border-color: #d1d5db;
+    color: #111827;
+}
+
+.stLinkButton > a {
+    background: #2563eb;
+    color: white;
+    padding: 10px 16px;
+    border-radius: 10px;
+    text-decoration: none;
+    font-weight: 600;
+    display: inline-block;
+    text-align: center;
+}
+
+.stLinkButton > a:hover {
+    background: #1d4ed8;
+    color: white;
+}
+
+.brand {
+    font-size: 34px;
+    font-weight: 700;
+    color: #1f2937;
+    margin-top: 4px;
+}
+
+.hero-wrap {
+    min-height: 62vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.hero-inner {
+    text-align: center;
+    margin-top: -50px;
+}
+
+.hero-title {
+    font-size: 72px;
+    font-weight: 800;
+    line-height: 1.05;
+    color: #1f2937;
+    margin-bottom: 18px;
+}
+
+.hero-sub {
+    font-size: 22px;
+    color: #6b7280;
+    margin-bottom: 34px;
+}
+
+.job-card {
+    background: white;
+    padding: 22px;
+    border-radius: 14px;
+    margin-bottom: 18px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+.upload-box {
+    border: 2px dashed #d1d5db;
+    padding: 42px;
+    border-radius: 14px;
+    background: white;
+    text-align: center;
+    margin-top: 18px;
+}
+
+[data-testid="stTextInput"] {
+    margin-top: 0.3rem;
+}
+
+hr {
+    margin-top: 1rem !important;
+    margin-bottom: 1.5rem !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------- HELPERS ----------------
+
+def fetch_jobs(days=1, search=""):
     try:
-        jobs = fetch_usajobs() or []
-        result = save_jobs(jobs)
-        print(
-            f"✅ USAJobs refreshed | fetched={len(jobs)} "
-            f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}"
-        )
-    except Exception as e:
-        print(f"❌ USAJobs failed: {e}")
-
-
-def refresh_adzuna():
-    print("🔄 Adzuna refresh started")
-    try:
-        jobs = fetch_adzuna_jobs() or []
-        result = save_jobs(jobs)
-        print(
-            f"✅ Adzuna refreshed | fetched={len(jobs)} "
-            f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}"
-        )
-    except Exception as e:
-        print(f"⚠️ Adzuna skipped: {e}")
-
-
-def refresh_all_sources():
-    print("🚀 Full refresh cycle started")
-    refresh_usajobs()
-    refresh_adzuna()
-    print("✅ Full refresh cycle finished")
-
-
-# --------------------------------------------------
-# Startup / Shutdown
-# --------------------------------------------------
-@app.on_event("startup")
-def startup_event():
-    init_db()
-
-    # Make sure old deployed tables get the new columns/indexes
-    ensure_jobs_schema()
-
-    # Run once immediately when the app starts
-    refresh_all_sources()
-
-    # Schedule each source separately
-    scheduler.add_job(
-        refresh_usajobs,
-        "interval",
-        hours=6,
-        id="refresh_usajobs",
-        replace_existing=True
-    )
-
-    scheduler.add_job(
-        refresh_adzuna,
-        "interval",
-        hours=2,
-        id="refresh_adzuna",
-        replace_existing=True
-    )
-
-    if not scheduler.running:
-        scheduler.start()
-
-    print("✅ Scheduler started")
-
-
-@app.on_event("shutdown")
-def shutdown_event():
-    if scheduler.running:
-        scheduler.shutdown()
-        print("🛑 Scheduler stopped")
-
-
-# --------------------------------------------------
-# Health
-# --------------------------------------------------
-@app.get("/")
-def health():
-    return {
-        "status": "Anvalyx backend running",
-        "active_sources": ACTIVE_SOURCES
-    }
-
-
-@app.head("/")
-def health_head():
-    return
-
-
-# --------------------------------------------------
-# Helpers
-# --------------------------------------------------
-def serialize_job(j: Job):
-    return {
-        "id": j.id,
-        "external_id": j.external_id,
-        "title": j.title,
-        "company": j.company,
-        "location": j.location,
-        "apply_url": j.url,
-        "source": j.source,
-        "description": j.description,
-        "posted": j.posted_at.isoformat() if j.posted_at else None
-    }
-
-
-# --------------------------------------------------
-# Jobs API
-# --------------------------------------------------
-@app.get("/jobs")
-def get_jobs(
-    search: str | None = None,
-    source: str | None = None,
-    location: str | None = None,
-    company: str | None = None,
-    title: str | None = None,
-    fresh_only: bool = False,
-    days: int | None = None,
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-):
-    db: Session = SessionLocal()
-    try:
-        query = (
-            db.query(Job)
-            .filter(Job.source.in_(ACTIVE_SOURCES))
-        )
-
-        if fresh_only:
-            cutoff = datetime.utcnow() - timedelta(days=7)
-            query = query.filter(Job.posted_at.isnot(None), Job.posted_at >= cutoff)
-
-        if days is not None:
-            cutoff = datetime.utcnow() - timedelta(days=days)
-            query = query.filter(Job.posted_at.isnot(None), Job.posted_at >= cutoff)
-
-        if source:
-            normalized_source = normalize_source_value(source)
-            query = query.filter(Job.source == normalized_source)
-
-        if location:
-            query = query.filter(Job.location.ilike(f"%{location.strip()}%"))
-
-        if company:
-            query = query.filter(Job.company.ilike(f"%{company.strip()}%"))
-
-        if title:
-            query = query.filter(Job.title.ilike(f"%{title.strip()}%"))
-
-        if search:
-            term = f"%{search.strip()}%"
-            query = query.filter(
-                or_(
-                    Job.title.ilike(term),
-                    Job.company.ilike(term),
-                    Job.location.ilike(term),
-                    Job.description.ilike(term)
-                )
-            )
-
-        jobs = (
-            query
-            .order_by(Job.posted_at.desc().nullslast(), Job.id.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-
-        return [serialize_job(j) for j in jobs]
-    finally:
-        db.close()
-
-
-@app.get("/jobs/fresh")
-def get_fresh_jobs(
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-):
-    db: Session = SessionLocal()
-    cutoff = datetime.utcnow() - timedelta(days=7)
-
-    try:
-        jobs = (
-            db.query(Job)
-            .filter(Job.posted_at.isnot(None))
-            .filter(Job.posted_at >= cutoff)
-            .filter(Job.source.in_(ACTIVE_SOURCES))
-            .order_by(Job.posted_at.desc().nullslast(), Job.id.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-        return [serialize_job(j) for j in jobs]
-    finally:
-        db.close()
-
-
-@app.get("/jobs/older")
-def get_older_jobs(
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-):
-    db: Session = SessionLocal()
-    start = datetime.utcnow() - timedelta(days=30)
-    end = datetime.utcnow() - timedelta(days=7)
-
-    try:
-        jobs = (
-            db.query(Job)
-            .filter(Job.posted_at.isnot(None))
-            .filter(Job.posted_at < end)
-            .filter(Job.posted_at >= start)
-            .filter(Job.source.in_(ACTIVE_SOURCES))
-            .order_by(Job.posted_at.desc().nullslast(), Job.id.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-        return [serialize_job(j) for j in jobs]
-    finally:
-        db.close()
-
-
-@app.get("/jobs/filters")
-def get_job_filters():
-    db: Session = SessionLocal()
-    try:
-        sources = [
-            row[0] for row in
-            db.query(Job.source)
-            .filter(Job.source.in_(ACTIVE_SOURCES))
-            .distinct()
-            .order_by(Job.source.asc())
-            .all()
-            if row[0]
-        ]
-
-        locations = [
-            row[0] for row in
-            db.query(Job.location)
-            .filter(Job.location.isnot(None))
-            .filter(Job.source.in_(ACTIVE_SOURCES))
-            .distinct()
-            .order_by(Job.location.asc())
-            .limit(200)
-            .all()
-            if row[0]
-        ]
-
-        companies = [
-            row[0] for row in
-            db.query(Job.company)
-            .filter(Job.company.isnot(None))
-            .filter(Job.source.in_(ACTIVE_SOURCES))
-            .distinct()
-            .order_by(Job.company.asc())
-            .limit(200)
-            .all()
-            if row[0]
-        ]
-
-        return {
-            "sources": sources,
-            "locations": locations,
-            "companies": companies
+        params = {
+            "days": days,
+            "limit": 100
         }
-    finally:
-        db.close()
+
+        if search and search.strip():
+            params["search"] = search.strip()
+
+        res = requests.get(f"{BACKEND_BASE}/jobs", params=params, timeout=20)
+
+        if res.status_code == 200:
+            return res.json()
+
+        st.warning(f"Jobs API returned {res.status_code}")
+        return []
+    except Exception:
+        st.error("Backend not reachable")
+        return []
 
 
-@app.get("/jobs/debug-counts")
-def debug_counts():
-    db: Session = SessionLocal()
+def format_posted_display(raw):
+    if not raw:
+        return "Unknown"
+
     try:
-        cutoff = datetime.utcnow() - timedelta(days=7)
+        raw = str(raw).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(raw)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return str(raw)
 
-        fresh_jobs = (
-            db.query(Job)
-            .filter(Job.posted_at.isnot(None))
-            .filter(Job.posted_at >= cutoff)
-            .filter(Job.source.in_(ACTIVE_SOURCES))
-            .count()
+
+def parse_docx(file):
+    doc = Document(file)
+    return "\n".join([p.text for p in doc.paragraphs])
+
+
+def parse_pdf(file):
+    text = ""
+    with pdfplumber.open(file) as pdf:
+        for page in pdf.pages:
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + "\n"
+    return text
+
+
+def parse_txt(file):
+    return file.read().decode("utf-8", errors="ignore")
+
+
+def render_job_card(job):
+    st.markdown('<div class="job-card">', unsafe_allow_html=True)
+
+    col1, col2 = st.columns([6, 1])
+
+    with col1:
+        st.subheader(job.get("title", "Untitled Role"))
+        st.write(f"{job.get('company', 'Unknown Company')} • {job.get('location', 'Unknown Location')}")
+        st.caption(
+            f"{job.get('source', 'Unknown Source')} | Posted {format_posted_display(job.get('posted'))}"
         )
 
-        missing_descriptions = (
-            db.query(Job)
-            .filter(
-                or_(
-                    Job.description.is_(None),
-                    Job.description == ""
+    with col2:
+        apply_url = job.get("apply_url")
+        if apply_url:
+            st.link_button("Apply", apply_url)
+
+    job_id = job.get("id", job.get("title", "job"))
+
+    if st.button("Check ATS Score", key=f"ats_{job_id}"):
+        try:
+            res = requests.get(f"{BACKEND_BASE}/ats/score/job/{job_id}", timeout=20)
+
+            if res.status_code == 200:
+                data = res.json()
+                st.metric("ATS Score", f"{data.get('score', 0)}%")
+
+                if data.get("strengths"):
+                    st.success("Strengths")
+                    for s in data["strengths"]:
+                        st.write(f"• {s}")
+
+                if data.get("gaps"):
+                    st.warning("Skill Gaps")
+                    for g in data["gaps"]:
+                        st.write(f"• {g}")
+            else:
+                st.warning("Could not fetch ATS score.")
+        except Exception:
+            st.warning("ATS service is not reachable right now.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------------- NAVBAR ----------------
+
+nav1, nav2, nav3, nav4, nav5, nav6, nav7 = st.columns([2.6, 1, 1.1, 1, 1.4, 1, 1])
+
+with nav1:
+    st.markdown('<div class="brand">Anvalyx</div>', unsafe_allow_html=True)
+
+with nav2:
+    if st.button("Jobs"):
+        st.session_state.page = "jobs"
+        st.rerun()
+
+with nav3:
+    if st.button("Companies"):
+        st.info("Companies page coming soon")
+
+with nav4:
+    if st.button("Resume"):
+        st.session_state.page = "resume"
+        st.rerun()
+
+with nav5:
+    st.write("")
+
+with nav6:
+    if st.button("Login"):
+        st.info("Login coming soon")
+
+with nav7:
+    if st.button("Sign Up"):
+        st.info("Signup coming soon")
+
+st.divider()
+
+# ---------------- HOME PAGE ----------------
+
+if st.session_state.page == "home":
+    st.markdown("""
+    <div class="hero-wrap">
+        <div class="hero-inner">
+            <div class="hero-title">Find Your Next Data Analytics Role</div>
+            <div class="hero-sub">AI-powered job aggregator with ATS match scoring</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns([2.2, 1, 2.2])
+    with c2:
+        if st.button("Browse Jobs"):
+            st.session_state.page = "jobs"
+            st.rerun()
+
+# ---------------- JOBS PAGE ----------------
+
+elif st.session_state.page == "jobs":
+    st.title("Data Analytics Jobs")
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+
+    with c1:
+        if st.button("24 Hours"):
+            st.session_state.filter_days = 1
+            st.rerun()
+
+    with c2:
+        if st.button("3 Days"):
+            st.session_state.filter_days = 3
+            st.rerun()
+
+    with c3:
+        if st.button("5 Days"):
+            st.session_state.filter_days = 5
+            st.rerun()
+
+    with c4:
+        if st.button("7 Days"):
+            st.session_state.filter_days = 7
+            st.rerun()
+
+    with c5:
+        if st.button("10 Days"):
+            st.session_state.filter_days = 10
+            st.rerun()
+
+    with c6:
+        if st.button("30 Days"):
+            st.session_state.filter_days = 30
+            st.rerun()
+
+    st.divider()
+
+    search_value = st.text_input(
+        "Search Jobs",
+        value=st.session_state.search_query,
+        placeholder="Search Data Analyst, SQL, Python..."
+    )
+
+    if search_value != st.session_state.search_query:
+        st.session_state.search_query = search_value
+
+    jobs = fetch_jobs(
+        days=st.session_state.filter_days,
+        search=st.session_state.search_query
+    )
+
+    bucket_labels = {
+        1: "last 24 hours",
+        3: "1 to 3 days ago",
+        5: "3 to 5 days ago",
+        7: "5 to 7 days ago",
+        10: "7 to 10 days ago",
+        30: "10 to 30 days ago",
+    }
+
+    label = bucket_labels.get(st.session_state.filter_days, f"last {st.session_state.filter_days} days")
+
+    st.caption(
+        f"Showing jobs posted {label}"
+        + (f" matching '{st.session_state.search_query}'" if st.session_state.search_query.strip() else "")
+    )
+
+    if not jobs:
+        st.info("No jobs found for this filter/search.")
+
+    for job in jobs:
+        render_job_card(job)
+
+    if st.button("← Back to Home"):
+        st.session_state.page = "home"
+        st.rerun()
+
+# ---------------- RESUME PAGE ----------------
+
+elif st.session_state.page == "resume":
+    st.title("Upload Your Resume")
+
+    st.markdown('<div class="upload-box">', unsafe_allow_html=True)
+
+    uploaded_file = st.file_uploader(
+        "Upload resume",
+        type=["pdf", "docx", "txt"]
+    )
+
+    if uploaded_file:
+        if uploaded_file.name.endswith(".docx"):
+            resume_text = parse_docx(uploaded_file)
+        elif uploaded_file.name.endswith(".pdf"):
+            resume_text = parse_pdf(uploaded_file)
+        else:
+            resume_text = parse_txt(uploaded_file)
+
+        if st.button("Save Resume"):
+            try:
+                res = requests.post(
+                    f"{BACKEND_BASE}/resume",
+                    json={"resume_text": resume_text},
+                    timeout=30
                 )
-            )
-            .count()
-        )
 
-        with_descriptions = (
-            db.query(Job)
-            .filter(Job.description.isnot(None))
-            .filter(Job.description != "")
-            .count()
-        )
+                if res.status_code in (200, 201):
+                    st.success("Resume saved successfully")
+                else:
+                    st.warning("Resume upload failed.")
+            except Exception:
+                st.warning("Resume service is not reachable right now.")
 
-        counts = get_job_counts()
-        counts["fresh_jobs_active_sources"] = fresh_jobs
-        counts["active_sources"] = ACTIVE_SOURCES
-        counts["jobs_with_description"] = with_descriptions
-        counts["jobs_missing_description"] = missing_descriptions
-        return counts
-    finally:
-        db.close()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-
-# --------------------------------------------------
-# Admin API
-# --------------------------------------------------
-@app.delete("/admin/clear-jobs")
-def clear_jobs():
-    deleted = clear_all_jobs()
-    return {
-        "message": "All jobs cleared successfully",
-        "deleted_jobs": deleted
-    }
-
-
-# --------------------------------------------------
-# Resume API
-# --------------------------------------------------
-class ResumeRequest(BaseModel):
-    resume_text: str
-
-
-@app.post("/resume")
-def upload_resume(payload: ResumeRequest):
-    resume = save_resume(payload.resume_text)
-    return {"message": "Resume saved", "resume_id": resume.id}
-
-
-@app.get("/resume")
-def fetch_resume():
-    resume = get_active_resume()
-
-    if not resume:
-        return {"message": "No resume found"}
-
-    return {
-        "resume_text": resume.resume_text,
-        "updated_at": resume.updated_at
-    }
-
-
-# --------------------------------------------------
-# TEMP ADMIN: Reset jobs table
-# --------------------------------------------------
-@app.get("/admin/reset-jobs-table")
-def reset_jobs_table():
-    from database import engine, Job
-
-    try:
-        Job.__table__.drop(bind=engine, checkfirst=True)
-        Job.__table__.create(bind=engine, checkfirst=True)
-        ensure_jobs_schema()
-        return {"message": "jobs table reset successfully"}
-    except Exception as e:
-        return {"error": str(e)}
+    if st.button("← Back to Home"):
+        st.session_state.page = "home"
+        st.rerun()
