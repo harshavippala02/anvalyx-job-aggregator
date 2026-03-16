@@ -1,9 +1,10 @@
 from dotenv import load_dotenv
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from datetime import datetime, timedelta
 
 # --------------------------------------------------
@@ -24,7 +25,9 @@ from database import (
     get_job_counts,
     SessionLocal,
     Job,
-    ACTIVE_SOURCES
+    ACTIVE_SOURCES,
+    ensure_jobs_schema,
+    normalize_source_value,
 )
 
 from adzuna_client import fetch_adzuna_jobs
@@ -54,7 +57,7 @@ def refresh_usajobs():
         result = save_jobs(jobs)
         print(
             f"✅ USAJobs refreshed | fetched={len(jobs)} "
-            f"| inserted={result['inserted']} | skipped={result['skipped']}"
+            f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}"
         )
     except Exception as e:
         print(f"❌ USAJobs failed: {e}")
@@ -67,7 +70,7 @@ def refresh_adzuna():
         result = save_jobs(jobs)
         print(
             f"✅ Adzuna refreshed | fetched={len(jobs)} "
-            f"| inserted={result['inserted']} | skipped={result['skipped']}"
+            f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}"
         )
     except Exception as e:
         print(f"⚠️ Adzuna skipped: {e}")
@@ -86,6 +89,9 @@ def refresh_all_sources():
 @app.on_event("startup")
 def startup_event():
     init_db()
+
+    # Make sure old deployed tables get the new columns/indexes
+    ensure_jobs_schema()
 
     # Run once immediately when the app starts
     refresh_all_sources()
@@ -107,7 +113,9 @@ def startup_event():
         replace_existing=True
     )
 
-    scheduler.start()
+    if not scheduler.running:
+        scheduler.start()
+
     print("✅ Scheduler started")
 
 
@@ -155,23 +163,74 @@ def serialize_job(j: Job):
 # Jobs API
 # --------------------------------------------------
 @app.get("/jobs")
-def get_jobs():
+def get_jobs(
+    search: str | None = None,
+    source: str | None = None,
+    location: str | None = None,
+    company: str | None = None,
+    title: str | None = None,
+    fresh_only: bool = False,
+    days: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
     db: Session = SessionLocal()
     try:
-        jobs = (
+        query = (
             db.query(Job)
-            .filter(Job.posted_at.isnot(None))
             .filter(Job.source.in_(ACTIVE_SOURCES))
-            .order_by(Job.posted_at.desc())
+        )
+
+        if fresh_only:
+            cutoff = datetime.utcnow() - timedelta(days=7)
+            query = query.filter(Job.posted_at.isnot(None), Job.posted_at >= cutoff)
+
+        if days is not None:
+            cutoff = datetime.utcnow() - timedelta(days=days)
+            query = query.filter(Job.posted_at.isnot(None), Job.posted_at >= cutoff)
+
+        if source:
+            normalized_source = normalize_source_value(source)
+            query = query.filter(Job.source == normalized_source)
+
+        if location:
+            query = query.filter(Job.location.ilike(f"%{location.strip()}%"))
+
+        if company:
+            query = query.filter(Job.company.ilike(f"%{company.strip()}%"))
+
+        if title:
+            query = query.filter(Job.title.ilike(f"%{title.strip()}%"))
+
+        if search:
+            term = f"%{search.strip()}%"
+            query = query.filter(
+                or_(
+                    Job.title.ilike(term),
+                    Job.company.ilike(term),
+                    Job.location.ilike(term),
+                    Job.description.ilike(term)
+                )
+            )
+
+        jobs = (
+            query
+            .order_by(Job.posted_at.desc().nullslast(), Job.id.desc())
+            .offset(offset)
+            .limit(limit)
             .all()
         )
+
         return [serialize_job(j) for j in jobs]
     finally:
         db.close()
 
 
 @app.get("/jobs/fresh")
-def get_fresh_jobs():
+def get_fresh_jobs(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
     db: Session = SessionLocal()
     cutoff = datetime.utcnow() - timedelta(days=7)
 
@@ -181,7 +240,9 @@ def get_fresh_jobs():
             .filter(Job.posted_at.isnot(None))
             .filter(Job.posted_at >= cutoff)
             .filter(Job.source.in_(ACTIVE_SOURCES))
-            .order_by(Job.posted_at.desc())
+            .order_by(Job.posted_at.desc().nullslast(), Job.id.desc())
+            .offset(offset)
+            .limit(limit)
             .all()
         )
         return [serialize_job(j) for j in jobs]
@@ -190,7 +251,10 @@ def get_fresh_jobs():
 
 
 @app.get("/jobs/older")
-def get_older_jobs():
+def get_older_jobs(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
     db: Session = SessionLocal()
     start = datetime.utcnow() - timedelta(days=30)
     end = datetime.utcnow() - timedelta(days=7)
@@ -202,10 +266,59 @@ def get_older_jobs():
             .filter(Job.posted_at < end)
             .filter(Job.posted_at >= start)
             .filter(Job.source.in_(ACTIVE_SOURCES))
-            .order_by(Job.posted_at.desc())
+            .order_by(Job.posted_at.desc().nullslast(), Job.id.desc())
+            .offset(offset)
+            .limit(limit)
             .all()
         )
         return [serialize_job(j) for j in jobs]
+    finally:
+        db.close()
+
+
+@app.get("/jobs/filters")
+def get_job_filters():
+    db: Session = SessionLocal()
+    try:
+        sources = [
+            row[0] for row in
+            db.query(Job.source)
+            .filter(Job.source.in_(ACTIVE_SOURCES))
+            .distinct()
+            .order_by(Job.source.asc())
+            .all()
+            if row[0]
+        ]
+
+        locations = [
+            row[0] for row in
+            db.query(Job.location)
+            .filter(Job.location.isnot(None))
+            .filter(Job.source.in_(ACTIVE_SOURCES))
+            .distinct()
+            .order_by(Job.location.asc())
+            .limit(200)
+            .all()
+            if row[0]
+        ]
+
+        companies = [
+            row[0] for row in
+            db.query(Job.company)
+            .filter(Job.company.isnot(None))
+            .filter(Job.source.in_(ACTIVE_SOURCES))
+            .distinct()
+            .order_by(Job.company.asc())
+            .limit(200)
+            .all()
+            if row[0]
+        ]
+
+        return {
+            "sources": sources,
+            "locations": locations,
+            "companies": companies
+        }
     finally:
         db.close()
 
@@ -224,9 +337,29 @@ def debug_counts():
             .count()
         )
 
+        missing_descriptions = (
+            db.query(Job)
+            .filter(
+                or_(
+                    Job.description.is_(None),
+                    Job.description == ""
+                )
+            )
+            .count()
+        )
+
+        with_descriptions = (
+            db.query(Job)
+            .filter(Job.description.isnot(None))
+            .filter(Job.description != "")
+            .count()
+        )
+
         counts = get_job_counts()
         counts["fresh_jobs_active_sources"] = fresh_jobs
         counts["active_sources"] = ACTIVE_SOURCES
+        counts["jobs_with_description"] = with_descriptions
+        counts["jobs_missing_description"] = missing_descriptions
         return counts
     finally:
         db.close()
@@ -268,8 +401,10 @@ def fetch_resume():
         "resume_text": resume.resume_text,
         "updated_at": resume.updated_at
     }
+
+
 # --------------------------------------------------
-# TEMP ADMIN: Reset jobs table (for schema updates)
+# TEMP ADMIN: Reset jobs table
 # --------------------------------------------------
 @app.get("/admin/reset-jobs-table")
 def reset_jobs_table():
@@ -278,6 +413,7 @@ def reset_jobs_table():
     try:
         Job.__table__.drop(bind=engine, checkfirst=True)
         Job.__table__.create(bind=engine, checkfirst=True)
+        ensure_jobs_schema()
         return {"message": "jobs table reset successfully"}
     except Exception as e:
         return {"error": str(e)}

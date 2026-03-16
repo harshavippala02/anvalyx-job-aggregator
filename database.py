@@ -6,7 +6,8 @@ from sqlalchemy import (
     Text,
     DateTime,
     Boolean,
-    UniqueConstraint
+    UniqueConstraint,
+    text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
@@ -19,7 +20,13 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     DATABASE_URL = "sqlite:///./jobs.db"
 
-engine = create_engine(DATABASE_URL)
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True
+)
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -31,6 +38,67 @@ Base = declarative_base()
 
 # Only these sources are active right now
 ACTIVE_SOURCES = ["usajobs", "adzuna"]
+
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def normalize_source_value(source):
+    if not source:
+        return None
+
+    s = str(source).strip().lower()
+
+    mapping = {
+        "usajobs": "usajobs",
+        "usa jobs": "usajobs",
+        "adzuna": "adzuna",
+    }
+
+    return mapping.get(s, s)
+
+
+def clean_text(value):
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value if value else None
+
+
+def parse_posted_at(value):
+    if not value:
+        return None
+
+    if isinstance(value, datetime):
+        if value.tzinfo:
+            return value.replace(tzinfo=None)
+        return value
+
+    try:
+        value = str(value).strip()
+        # Handle Zulu time like 2026-02-06T08:55:17Z
+        if value.endswith("Z"):
+            value = value.replace("Z", "+00:00")
+
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo:
+            dt = dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def normalize_job(job: dict):
+    return {
+        "external_id": clean_text(job.get("external_id")),
+        "title": clean_text(job.get("title")) or "Untitled Job",
+        "company": clean_text(job.get("company")) or "Unknown",
+        "location": clean_text(job.get("location")) or "Unknown",
+        "url": clean_text(job.get("url")),
+        "source": normalize_source_value(job.get("source")),
+        "description": clean_text(job.get("description")),
+        "posted_at": parse_posted_at(job.get("posted_at")),
+    }
 
 
 # -----------------------------
@@ -77,60 +145,164 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
 
+def ensure_jobs_schema():
+    db = SessionLocal()
+    try:
+        # Create jobs table if missing
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS jobs (
+                id SERIAL PRIMARY KEY,
+                external_id VARCHAR NOT NULL,
+                title VARCHAR NULL,
+                company VARCHAR NULL,
+                location VARCHAR NULL,
+                url VARCHAR NULL,
+                source VARCHAR NOT NULL,
+                description TEXT NULL,
+                posted_at TIMESTAMP NULL
+            )
+        """))
+
+        # Add missing columns on older deployed schemas
+        db.execute(text("""
+            ALTER TABLE jobs
+            ADD COLUMN IF NOT EXISTS description TEXT
+        """))
+
+        db.execute(text("""
+            ALTER TABLE jobs
+            ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP
+        """))
+
+        # Add helpful indexes
+        db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_jobs_external_id ON jobs (external_id)
+        """))
+        db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_jobs_source ON jobs (source)
+        """))
+        db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_jobs_title ON jobs (title)
+        """))
+        db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_jobs_company ON jobs (company)
+        """))
+        db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_jobs_location ON jobs (location)
+        """))
+        db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_jobs_posted_at ON jobs (posted_at)
+        """))
+
+        # Add unique constraint safely if missing
+        db.execute(text("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'uq_job_external_source'
+                ) THEN
+                    ALTER TABLE jobs
+                    ADD CONSTRAINT uq_job_external_source UNIQUE (external_id, source);
+                END IF;
+            END
+            $$;
+        """))
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 # -----------------------------
 # Job helpers
 # -----------------------------
 def save_jobs(jobs):
     db = SessionLocal()
     inserted = 0
+    updated = 0
     skipped = 0
 
     try:
         jobs = [j for j in (jobs or []) if isinstance(j, dict)]
 
         if not jobs:
-            print("💾 save_jobs complete | inserted=0, skipped=0")
-            return {"inserted": 0, "skipped": 0}
+            print("💾 save_jobs complete | inserted=0, updated=0, skipped=0")
+            return {"inserted": 0, "updated": 0, "skipped": 0}
 
-        valid_jobs = []
-        for job in jobs:
-            external_id = job.get("external_id")
-            source = job.get("source")
+        normalized_jobs = []
+        for raw_job in jobs:
+            job = normalize_job(raw_job)
 
-            if not external_id or not source:
+            if not job["external_id"] or not job["source"] or not job["url"]:
                 skipped += 1
                 continue
 
-            valid_jobs.append(job)
+            normalized_jobs.append(job)
 
-        if not valid_jobs:
-            print(f"💾 save_jobs complete | inserted=0, skipped={skipped}")
-            return {"inserted": 0, "skipped": skipped}
+        if not normalized_jobs:
+            print(f"💾 save_jobs complete | inserted=0, updated=0, skipped={skipped}")
+            return {"inserted": 0, "updated": 0, "skipped": skipped}
 
-        sources = list({j["source"] for j in valid_jobs})
-        external_ids = list({j["external_id"] for j in valid_jobs})
+        sources = list({j["source"] for j in normalized_jobs})
+        external_ids = list({j["external_id"] for j in normalized_jobs})
 
-        existing_rows = db.query(Job.external_id, Job.source).filter(
+        existing_rows = db.query(Job).filter(
             Job.source.in_(sources),
             Job.external_id.in_(external_ids)
         ).all()
 
-        existing_keys = {(row.external_id, row.source) for row in existing_rows}
+        existing_map = {
+            (row.external_id, row.source): row
+            for row in existing_rows
+        }
 
-        for job in valid_jobs:
+        for job in normalized_jobs:
             key = (job["external_id"], job["source"])
+            existing = existing_map.get(key)
 
-            if key in existing_keys:
-                skipped += 1
-                continue
+            if existing:
+                changed = False
 
-            db.add(Job(**job))
-            existing_keys.add(key)
-            inserted += 1
+                if existing.title != job["title"]:
+                    existing.title = job["title"]
+                    changed = True
+
+                if existing.company != job["company"]:
+                    existing.company = job["company"]
+                    changed = True
+
+                if existing.location != job["location"]:
+                    existing.location = job["location"]
+                    changed = True
+
+                if existing.url != job["url"]:
+                    existing.url = job["url"]
+                    changed = True
+
+                if existing.description != job["description"]:
+                    existing.description = job["description"]
+                    changed = True
+
+                if existing.posted_at != job["posted_at"]:
+                    existing.posted_at = job["posted_at"]
+                    changed = True
+
+                if changed:
+                    updated += 1
+                else:
+                    skipped += 1
+            else:
+                db.add(Job(**job))
+                inserted += 1
 
         db.commit()
-        print(f"💾 save_jobs complete | inserted={inserted}, skipped={skipped}")
-        return {"inserted": inserted, "skipped": skipped}
+        print(f"💾 save_jobs complete | inserted={inserted}, updated={updated}, skipped={skipped}")
+        return {"inserted": inserted, "updated": updated, "skipped": skipped}
 
     except Exception:
         db.rollback()
@@ -142,7 +314,7 @@ def save_jobs(jobs):
 def get_all_jobs():
     db = SessionLocal()
     try:
-        jobs = db.query(Job).order_by(Job.posted_at.desc()).all()
+        jobs = db.query(Job).order_by(Job.posted_at.desc().nullslast(), Job.id.desc()).all()
         return jobs
     finally:
         db.close()
@@ -187,10 +359,6 @@ def get_job_counts():
 # Resume helpers
 # -----------------------------
 def save_resume(resume_text: str):
-    """
-    Saves a new resume and deactivates old ones.
-    Only ONE resume is active at any time.
-    """
     db = SessionLocal()
 
     try:
@@ -213,9 +381,6 @@ def save_resume(resume_text: str):
 
 
 def get_active_resume():
-    """
-    Returns the currently active resume.
-    """
     db = SessionLocal()
     try:
         resume = (
@@ -232,9 +397,6 @@ def get_active_resume():
 # FastAPI DB dependency
 # -----------------------------
 def get_db():
-    """
-    Yields a database session for FastAPI routes
-    """
     db = SessionLocal()
     try:
         yield db
