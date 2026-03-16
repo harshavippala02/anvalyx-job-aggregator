@@ -268,3 +268,16 @@ def fetch_resume():
         "resume_text": resume.resume_text,
         "updated_at": resume.updated_at
     }
+# --------------------------------------------------
+# TEMP ADMIN: Reset jobs table (for schema updates)
+# --------------------------------------------------
+@app.get("/admin/reset-jobs-table")
+def reset_jobs_table():
+    from database import engine, Job
+
+    try:
+        Job.__table__.drop(bind=engine, checkfirst=True)
+        Job.__table__.create(bind=engine, checkfirst=True)
+        return {"message": "jobs table reset successfully"}
+    except Exception as e:
+        return {"error": str(e)}
