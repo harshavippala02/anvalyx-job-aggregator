@@ -36,7 +36,6 @@ SessionLocal = sessionmaker(
 
 Base = declarative_base()
 
-# Only these sources are active right now
 ACTIVE_SOURCES = ["usajobs", "adzuna"]
 
 
@@ -76,7 +75,6 @@ def parse_posted_at(value):
 
     try:
         value = str(value).strip()
-        # Handle Zulu time like 2026-02-06T08:55:17Z
         if value.endswith("Z"):
             value = value.replace("Z", "+00:00")
 
@@ -122,7 +120,7 @@ class Job(Base):
 
 
 # -----------------------------
-# Resume table (single active resume)
+# Resume table
 # -----------------------------
 class UserResume(Base):
     __tablename__ = "user_resume"
@@ -148,7 +146,6 @@ def init_db():
 def ensure_jobs_schema():
     db = SessionLocal()
     try:
-        # Create jobs table if missing
         db.execute(text("""
             CREATE TABLE IF NOT EXISTS jobs (
                 id SERIAL PRIMARY KEY,
@@ -163,7 +160,6 @@ def ensure_jobs_schema():
             )
         """))
 
-        # Add missing columns on older deployed schemas
         db.execute(text("""
             ALTER TABLE jobs
             ADD COLUMN IF NOT EXISTS description TEXT
@@ -174,7 +170,6 @@ def ensure_jobs_schema():
             ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP
         """))
 
-        # Add helpful indexes
         db.execute(text("""
             CREATE INDEX IF NOT EXISTS ix_jobs_external_id ON jobs (external_id)
         """))
@@ -194,7 +189,6 @@ def ensure_jobs_schema():
             CREATE INDEX IF NOT EXISTS ix_jobs_posted_at ON jobs (posted_at)
         """))
 
-        # Add unique constraint safely if missing
         db.execute(text("""
             DO $$
             BEGIN

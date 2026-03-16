@@ -33,39 +33,18 @@ if "search_query" not in st.session_state:
 
 st.markdown("""
 <style>
+[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stStatusWidget"] { display: none !important; }
+header { display: none !important; }
+footer { display: none !important; }
+#MainMenu { visibility: hidden; }
 
-/* Hide Streamlit top-right menu / toolbar / footer / header */
-[data-testid="stToolbar"] {
-    display: none !important;
-}
-
-[data-testid="stDecoration"] {
-    display: none !important;
-}
-
-[data-testid="stStatusWidget"] {
-    display: none !important;
-}
-
-header {
-    display: none !important;
-}
-
-footer {
-    display: none !important;
-}
-
-#MainMenu {
-    visibility: hidden;
-}
-
-/* Main app */
 .stApp {
     background: #f8fafc;
     color: #1f2937;
 }
 
-/* Reduce default top padding */
 .block-container {
     padding-top: 1.2rem !important;
     padding-bottom: 2rem !important;
@@ -73,7 +52,6 @@ footer {
     padding-right: 3rem !important;
 }
 
-/* Buttons */
 .stButton > button {
     background: white;
     border: 1px solid #e5e7eb;
@@ -92,7 +70,6 @@ footer {
     color: #111827;
 }
 
-/* Link button */
 .stLinkButton > a {
     background: #2563eb;
     color: white;
@@ -109,7 +86,6 @@ footer {
     color: white;
 }
 
-/* Navbar brand */
 .brand {
     font-size: 34px;
     font-weight: 700;
@@ -117,7 +93,6 @@ footer {
     margin-top: 4px;
 }
 
-/* Hero section */
 .hero-wrap {
     min-height: 62vh;
     display: flex;
@@ -144,7 +119,6 @@ footer {
     margin-bottom: 34px;
 }
 
-/* Job card */
 .job-card {
     background: white;
     padding: 22px;
@@ -154,7 +128,6 @@ footer {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
 }
 
-/* Resume upload box */
 .upload-box {
     border: 2px dashed #d1d5db;
     padding: 42px;
@@ -164,12 +137,10 @@ footer {
     margin-top: 18px;
 }
 
-/* Search box spacing */
 [data-testid="stTextInput"] {
     margin-top: 0.3rem;
 }
 
-/* Cleaner divider spacing */
 hr {
     margin-top: 1rem !important;
     margin-bottom: 1.5rem !important;
@@ -380,8 +351,19 @@ elif st.session_state.page == "jobs":
         search=st.session_state.search_query
     )
 
+    bucket_labels = {
+        1: "last 24 hours",
+        3: "1 to 3 days ago",
+        5: "3 to 5 days ago",
+        7: "5 to 7 days ago",
+        10: "7 to 10 days ago",
+        30: "10 to 30 days ago",
+    }
+
+    label = bucket_labels.get(st.session_state.filter_days, f"last {st.session_state.filter_days} days")
+
     st.caption(
-        f"Showing jobs from the last {st.session_state.filter_days} day(s)"
+        f"Showing jobs posted {label}"
         + (f" matching '{st.session_state.search_query}'" if st.session_state.search_query.strip() else "")
     )
 
