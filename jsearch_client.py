@@ -1,4 +1,5 @@
 import os
+import time
 import hashlib
 from datetime import datetime
 from typing import Any
@@ -23,23 +24,11 @@ KEYWORDS = [
     "Data Analyst",
     "Business Analyst",
     "BI Analyst",
-    "Reporting Analyst",
-    "Business Intelligence Analyst",
-    "Analytics Engineer",
-    "Product Analyst",
-    "Marketing Analyst",
-    "Operations Analyst",
-    "Insights Analyst",
-    "Decision Scientist",
 ]
 
 LOCATIONS = [
     "United States",
     "Remote",
-    "New York, NY",
-    "California",
-    "Texas",
-    "Illinois",
 ]
 
 ALLOWED_TITLE_KEYWORDS = [
@@ -59,13 +48,13 @@ BLOCKED_TITLE_KEYWORDS = [
     "recruiter",
 ]
 
-# Keep this moderate to avoid burning quota too fast.
 PAGES_PER_QUERY = 1
-
-# JSearch supports filters like employment_types and remote_jobs_only via RapidAPI examples.
 EMPLOYMENT_TYPES = "FULLTIME"
 DATE_POSTED = "3days"
 REMOTE_ONLY_FOR_REMOTE_LOCATION = True
+
+REQUEST_SLEEP_SECONDS = 3
+REQUEST_TIMEOUT_SECONDS = 20
 
 
 def make_external_id(job: dict[str, Any]) -> str:
@@ -165,14 +154,14 @@ def normalize_jsearch_job(job: dict[str, Any]) -> dict[str, Any] | None:
         "location": build_location(job),
         "url": apply_url,
         "source": "jsearch",
-        "description": description,
+        "description": description[:2000],
         "posted_at": posted_at,
     }
 
 
 def fetch_jsearch_page(keyword: str, location: str) -> list[dict[str, Any]]:
     if not JSEARCH_API_KEY:
-        print("⚠️ JSEARCH_API_KEY missing, skipping JSearch")
+        print("⚠️ JSEARCH_API_KEY missing, skipping JSearch", flush=True)
         return []
 
     params = {
@@ -187,7 +176,12 @@ def fetch_jsearch_page(keyword: str, location: str) -> list[dict[str, Any]]:
     if REMOTE_ONLY_FOR_REMOTE_LOCATION and location.lower() == "remote":
         params["remote_jobs_only"] = "true"
 
-    response = requests.get(JSEARCH_URL, headers=HEADERS, params=params, timeout=45)
+    response = requests.get(
+        JSEARCH_URL,
+        headers=HEADERS,
+        params=params,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
     response.raise_for_status()
 
     payload = response.json()
@@ -207,7 +201,10 @@ def fetch_jsearch_jobs() -> list[dict[str, Any]]:
         for location in LOCATIONS:
             try:
                 raw_jobs = fetch_jsearch_page(keyword, location)
-                print(f"JSearch fetched {len(raw_jobs)} raw jobs for {keyword} | {location}")
+                print(
+                    f"JSearch fetched {len(raw_jobs)} raw jobs for {keyword} | {location}",
+                    flush=True
+                )
 
                 for raw_job in raw_jobs:
                     normalized = normalize_jsearch_job(raw_job)
@@ -221,8 +218,20 @@ def fetch_jsearch_jobs() -> list[dict[str, Any]]:
                     seen_keys.add(key)
                     results.append(normalized)
 
-            except Exception as e:
-                print(f"⚠️ JSearch failed for {keyword} | {location}: {e}")
+            except requests.HTTPError as e:
+                status = getattr(e.response, "status_code", None)
 
-    print(f"✅ JSearch normalized jobs count = {len(results)}")
+                if status == 429:
+                    print("⚠️ JSearch rate limited, stopping this run", flush=True)
+                    print(f"✅ JSearch normalized jobs count = {len(results)}", flush=True)
+                    return results
+
+                print(f"⚠️ JSearch failed for {keyword} | {location}: {e}", flush=True)
+
+            except Exception as e:
+                print(f"⚠️ JSearch failed for {keyword} | {location}: {e}", flush=True)
+
+            time.sleep(REQUEST_SLEEP_SECONDS)
+
+    print(f"✅ JSearch normalized jobs count = {len(results)}", flush=True)
     return results
