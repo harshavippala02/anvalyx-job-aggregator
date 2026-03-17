@@ -204,15 +204,17 @@ def startup_event():
     if not scheduler.running:
         scheduler.start()
 
-    print("✅ Scheduler started", flush=True)
+    # one-time delayed boot refresh
+    scheduler.add_job(
+        refresh_jsearch,
+        "date",
+        run_date=datetime.utcnow() + timedelta(seconds=20),
+        id="boot_refresh_jsearch",
+        replace_existing=True
+    )
 
-    # one-time boot refresh for testing
-    try:
-        print("🚀 Running one-time boot refresh: JSearch", flush=True)
-        refresh_jsearch()
-        print("✅ One-time boot refresh finished", flush=True)
-    except Exception as e:
-        print(f"❌ One-time boot refresh failed: {e}", flush=True)
+    print("✅ Scheduler started", flush=True)
+    print("🚀 Scheduled one-time delayed boot refresh: JSearch", flush=True)
 
 
 @app.on_event("shutdown")
