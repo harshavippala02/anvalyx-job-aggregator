@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime
 
 import pdfplumber
@@ -188,8 +189,29 @@ hr {
 
 # ---------------- HELPERS ----------------
 
+def wait_for_backend_ready(max_wait_seconds=75):
+    start = time.time()
+
+    while time.time() - start < max_wait_seconds:
+        try:
+            res = requests.get(f"{BACKEND_BASE}/", timeout=10)
+            if res.status_code == 200:
+                return True
+        except Exception:
+            pass
+
+        time.sleep(3)
+
+    return False
+
+
+@st.cache_data(ttl=15, show_spinner=False)
 def fetch_jobs(days=1, search="", status=None):
     try:
+        ready = wait_for_backend_ready(max_wait_seconds=75)
+        if not ready:
+            return []
+
         params = {
             "days": days,
             "limit": 100
@@ -201,27 +223,41 @@ def fetch_jobs(days=1, search="", status=None):
         if status:
             params["status"] = status
 
-        res = requests.get(f"{BACKEND_BASE}/jobs", params=params, timeout=20)
+        res = requests.get(f"{BACKEND_BASE}/jobs", params=params, timeout=30)
 
         if res.status_code == 200:
             return res.json()
 
-        st.warning(f"Jobs API returned {res.status_code}")
+        try:
+            error_body = res.json()
+        except Exception:
+            error_body = res.text
+
+        st.warning(f"Jobs API returned {res.status_code}: {error_body}")
         return []
-    except Exception:
-        st.error("Backend not reachable")
+    except Exception as e:
+        st.error(f"Backend not reachable: {e}")
         return []
 
 
+@st.cache_data(ttl=15, show_spinner=False)
 def fetch_summary(search=""):
     try:
+        ready = wait_for_backend_ready(max_wait_seconds=75)
+        if not ready:
+            return {
+                "status_counts": {"jobs": 0, "saved": 0, "applied": 0, "skipped": 0},
+                "day_counts": {"1": 0, "3": 0, "5": 0, "7": 0, "10": 0, "30": 0},
+            }
+
         params = {}
         if search and search.strip():
             params["search"] = search.strip()
 
-        res = requests.get(f"{BACKEND_BASE}/jobs/summary", params=params, timeout=20)
+        res = requests.get(f"{BACKEND_BASE}/jobs/summary", params=params, timeout=30)
         if res.status_code == 200:
             return res.json()
+
         return {
             "status_counts": {"jobs": 0, "saved": 0, "applied": 0, "skipped": 0},
             "day_counts": {"1": 0, "3": 0, "5": 0, "7": 0, "10": 0, "30": 0},
@@ -247,12 +283,35 @@ def update_job_status(job_id, status_value):
 
 def refresh_source_jobs(endpoint_path):
     try:
+        ready = wait_for_backend_ready(max_wait_seconds=75)
+        if not ready:
+            return {
+                "ok": False,
+                "status_code": None,
+                "headers": {},
+                "data": {"error": "Backend did not wake up in time"},
+            }
+
         res = requests.post(f"{BACKEND_BASE}{endpoint_path}", timeout=180)
-        if res.status_code == 200:
-            return res.json()
-        return None
-    except Exception:
-        return None
+
+        try:
+            data = res.json()
+        except Exception:
+            data = {"raw_text": res.text}
+
+        return {
+            "ok": res.status_code == 200,
+            "status_code": res.status_code,
+            "headers": dict(res.headers),
+            "data": data,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "status_code": None,
+            "headers": {},
+            "data": {"error": str(e)},
+        }
 
 
 def fetch_ats_score(job_id):
@@ -390,6 +449,7 @@ def render_job_card(job):
     with b1:
         if st.button("Applied", key=f"applied_{job_id}"):
             if update_job_status(job_id, "applied"):
+                st.cache_data.clear()
                 st.rerun()
             else:
                 st.warning("Could not update status")
@@ -397,6 +457,7 @@ def render_job_card(job):
     with b2:
         if st.button("Skip", key=f"skip_{job_id}"):
             if update_job_status(job_id, "skipped"):
+                st.cache_data.clear()
                 st.rerun()
             else:
                 st.warning("Could not update status")
@@ -404,6 +465,7 @@ def render_job_card(job):
     with b3:
         if st.button("Save", key=f"save_{job_id}"):
             if update_job_status(job_id, "saved"):
+                st.cache_data.clear()
                 st.rerun()
             else:
                 st.warning("Could not update status")
@@ -466,61 +528,100 @@ if st.session_state.page == "home":
 
 elif st.session_state.page == "jobs":
     st.title("Data Analytics Jobs")
+    st.caption(f"Backend: {BACKEND_BASE}")
 
     st.subheader("Refresh Sources")
-    r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+    wake_col, r1c1, r1c2, r1c3, r1c4 = st.columns(5)
+
+    with wake_col:
+        if st.button("Wake Backend"):
+            with st.spinner("Waking backend..."):
+                if wait_for_backend_ready():
+                    st.success("Backend is awake")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("Backend did not wake up in time")
 
     with r1c1:
         if st.button("Refresh JSearch Jobs"):
-            result = refresh_source_jobs("/refresh-jsearch")
-            if result:
+            with st.spinner("Refreshing JSearch jobs..."):
+                result = refresh_source_jobs("/refresh-jsearch")
+
+            if result["ok"]:
+                data = result["data"]
                 st.success(
-                    f"JSearch refreshed: fetched={result.get('fetched', 0)}, "
-                    f"inserted={result.get('inserted', 0)}, updated={result.get('updated', 0)}, "
-                    f"skipped={result.get('skipped', 0)}"
+                    f"JSearch refreshed: fetched={data.get('fetched', 0)}, "
+                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
+                    f"skipped={data.get('skipped', 0)}"
                 )
+                st.cache_data.clear()
                 st.rerun()
             else:
-                st.warning("Could not refresh JSearch jobs")
+                st.error(
+                    f"JSearch refresh failed | status={result.get('status_code')} | "
+                    f"data={result.get('data')}"
+                )
 
     with r1c2:
         if st.button("Refresh LinkedIn Jobs"):
-            result = refresh_source_jobs("/refresh-linkedin")
-            if result:
+            with st.spinner("Refreshing LinkedIn jobs..."):
+                result = refresh_source_jobs("/refresh-linkedin")
+
+            if result["ok"]:
+                data = result["data"]
                 st.success(
-                    f"LinkedIn refreshed: fetched={result.get('fetched', 0)}, "
-                    f"inserted={result.get('inserted', 0)}, updated={result.get('updated', 0)}, "
-                    f"skipped={result.get('skipped', 0)}"
+                    f"LinkedIn refreshed: fetched={data.get('fetched', 0)}, "
+                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
+                    f"skipped={data.get('skipped', 0)}"
                 )
+                st.cache_data.clear()
                 st.rerun()
             else:
-                st.warning("Could not refresh LinkedIn jobs")
+                st.error(
+                    f"LinkedIn refresh failed | status={result.get('status_code')} | "
+                    f"data={result.get('data')}"
+                )
 
     with r1c3:
         if st.button("Refresh USAJobs Jobs"):
-            result = refresh_source_jobs("/refresh-usajobs")
-            if result:
+            with st.spinner("Refreshing USAJobs jobs..."):
+                result = refresh_source_jobs("/refresh-usajobs")
+
+            if result["ok"]:
+                data = result["data"]
                 st.success(
-                    f"USAJobs refreshed: fetched={result.get('fetched', 0)}, "
-                    f"inserted={result.get('inserted', 0)}, updated={result.get('updated', 0)}, "
-                    f"skipped={result.get('skipped', 0)}"
+                    f"USAJobs refreshed: fetched={data.get('fetched', 0)}, "
+                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
+                    f"skipped={data.get('skipped', 0)}"
                 )
+                st.cache_data.clear()
                 st.rerun()
             else:
-                st.warning("Could not refresh USAJobs jobs")
+                st.error(
+                    f"USAJobs refresh failed | status={result.get('status_code')} | "
+                    f"data={result.get('data')}"
+                )
 
     with r1c4:
         if st.button("Refresh Adzuna Jobs"):
-            result = refresh_source_jobs("/refresh-adzuna")
-            if result:
+            with st.spinner("Refreshing Adzuna jobs..."):
+                result = refresh_source_jobs("/refresh-adzuna")
+
+            if result["ok"]:
+                data = result["data"]
                 st.success(
-                    f"Adzuna refreshed: fetched={result.get('fetched', 0)}, "
-                    f"inserted={result.get('inserted', 0)}, updated={result.get('updated', 0)}, "
-                    f"skipped={result.get('skipped', 0)}"
+                    f"Adzuna refreshed: fetched={data.get('fetched', 0)}, "
+                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
+                    f"skipped={data.get('skipped', 0)}"
                 )
+                st.cache_data.clear()
                 st.rerun()
             else:
-                st.warning("Could not refresh Adzuna jobs")
+                st.error(
+                    f"Adzuna refresh failed | status={result.get('status_code')} | "
+                    f"data={result.get('data')}"
+                )
 
     st.write("")
 
@@ -666,6 +767,7 @@ elif st.session_state.page == "resume":
 
                 if res.status_code in (200, 201):
                     st.session_state.ats_cache = {}
+                    st.cache_data.clear()
                     st.success("Resume saved successfully")
                 else:
                     st.warning("Resume upload failed.")
