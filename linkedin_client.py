@@ -2,8 +2,7 @@ import re
 import time
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlencode, urlparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlencode
 
 BASE_URL = "https://www.linkedin.com/jobs/search"
 DETAIL_URL_TEMPLATE = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
@@ -25,11 +24,6 @@ KEYWORDS = [
     "Reporting Analyst",
     "Business Intelligence Analyst",
     "Analytics Engineer",
-    "Product Analyst",
-    "Marketing Analyst",
-    "Operations Analyst",
-    "Insights Analyst",
-    "Decision Scientist",
 ]
 
 LOCATIONS = [
@@ -37,10 +31,6 @@ LOCATIONS = [
     "Remote",
     "New York, United States",
     "California, United States",
-    "Texas, United States",
-    "Illinois, United States",
-    "Washington, United States",
-    "Massachusetts, United States",
 ]
 
 ALLOWED_TITLES = [
@@ -60,7 +50,6 @@ ALLOWED_TITLES = [
     "financial reporting analyst",
     "data reporting analyst",
     "sales operations analyst",
-    "operations analytics analyst",
 ]
 
 BLOCKED_TITLES = [
@@ -73,11 +62,11 @@ BLOCKED_TITLES = [
     "recruiter",
 ]
 
-START_OFFSETS = [0, 25, 50]
-TIME_FILTER = "r259200"  # last 3 days
-REQUEST_SLEEP_SECONDS = 1.0
-DETAIL_REQUEST_SLEEP_SECONDS = 0.15
-DETAIL_MAX_WORKERS = 8
+START_OFFSETS = [0, 25]
+TIME_FILTER = "r259200"
+REQUEST_SLEEP_SECONDS = 2.0
+DETAIL_REQUEST_SLEEP_SECONDS = 1.0
+DETAIL_FETCH_LIMIT = 20
 
 
 def build_url(keyword: str, location: str, start: int = 0) -> str:
@@ -100,25 +89,15 @@ def fetch_page(url: str) -> str:
 def extract_job_id_from_url(url: str) -> str | None:
     if not url:
         return None
-
-    # Typical LinkedIn URL:
-    # https://www.linkedin.com/jobs/view/job-title-4386531478
     match = re.search(r"/jobs/view/(?:[^/]+-)?(\d+)", url)
     if match:
         return match.group(1)
-
-    parsed = urlparse(url)
-    path_match = re.search(r"(\d+)", parsed.path or "")
-    if path_match:
-        return path_match.group(1)
-
     return None
 
 
 def clean_description_text(text: str) -> str:
     if not text:
         return ""
-
     text = re.sub(r"\r", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"[ \t]+", " ", text)
@@ -132,27 +111,22 @@ def fetch_job_description(job_id: str) -> str:
     detail_url = DETAIL_URL_TEMPLATE.format(job_id=job_id)
 
     try:
-        response = requests.get(detail_url, headers=HEADERS, timeout=30)
+        response = requests.get(detail_url, headers=HEADERS, timeout=20)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "html.parser")
-
         description_el = (
             soup.select_one(".show-more-less-html__markup")
             or soup.select_one(".description__text")
-            or soup.select_one(".job-search__description")
-            or soup.select_one("section.show-more-less-html")
             or soup.select_one("div.show-more-less-html__markup")
         )
 
         if not description_el:
             return ""
 
-        description = description_el.get_text("\n", strip=True)
-        return clean_description_text(description)
-
+        return clean_description_text(description_el.get_text("\n", strip=True))
     except Exception as e:
-        print(f"LinkedIn detail fetch failed for job_id={job_id}: {e}")
+        print(f"LinkedIn detail fetch failed for {job_id}: {e}")
         return ""
 
 
@@ -164,18 +138,9 @@ def parse_jobs(html: str) -> list[dict]:
 
     for card in cards:
         try:
-            title_el = (
-                card.select_one("h3.base-search-card__title")
-                or card.select_one("h3")
-            )
-            company_el = (
-                card.select_one("h4.base-search-card__subtitle")
-                or card.select_one("h4")
-            )
-            location_el = (
-                card.select_one(".job-search-card__location")
-                or card.select_one("span.job-search-card__location")
-            )
+            title_el = card.select_one("h3.base-search-card__title") or card.select_one("h3")
+            company_el = card.select_one("h4.base-search-card__subtitle") or card.select_one("h4")
+            location_el = card.select_one(".job-search-card__location") or card.select_one("span.job-search-card__location")
             link_el = (
                 card.select_one("a.base-card__full-link")
                 or card.select_one("a[href*='/jobs/view/']")
@@ -193,7 +158,7 @@ def parse_jobs(html: str) -> list[dict]:
             posted = time_el.get_text(" ", strip=True) if time_el else ""
             job_id = extract_job_id_from_url(url)
 
-            if not url or not job_id:
+            if not url:
                 continue
 
             jobs.append({
@@ -239,11 +204,9 @@ def is_allowed_title(title: str) -> bool:
 
     t = title.lower().strip()
 
-    # Keep analytics engineer specifically
     if "analytics engineer" in t:
         return True
 
-    # Seniority blocking
     senior_blockers = [
         "staff",
         "principal",
@@ -273,49 +236,12 @@ def dedupe_jobs(jobs: list[dict]) -> list[dict]:
             job.get("location", "").strip().lower(),
             job.get("url", "").strip().lower(),
         )
-
         if key in seen:
             continue
-
         seen.add(key)
         output.append(job)
 
     return output
-
-
-def enrich_jobs_with_descriptions(jobs: list[dict]) -> list[dict]:
-    if not jobs:
-        return jobs
-
-    enriched = []
-
-    with ThreadPoolExecutor(max_workers=DETAIL_MAX_WORKERS) as executor:
-        future_to_job = {
-            executor.submit(fetch_job_description, job["job_id"]): job
-            for job in jobs
-            if job.get("job_id")
-        }
-
-        for future in as_completed(future_to_job):
-            job = future_to_job[future]
-            try:
-                description = future.result() or ""
-            except Exception:
-                description = ""
-
-            job["description"] = description
-            enriched.append(job)
-
-            time.sleep(DETAIL_REQUEST_SLEEP_SECONDS)
-
-    # Preserve jobs that may not have been scheduled for any reason
-    enriched_by_url = {job["url"]: job for job in enriched}
-    final_jobs = []
-
-    for job in jobs:
-        final_jobs.append(enriched_by_url.get(job["url"], job))
-
-    return final_jobs
 
 
 def pull_linkedin_jobs() -> list[dict]:
@@ -333,28 +259,27 @@ def pull_linkedin_jobs() -> list[dict]:
                     if not jobs:
                         break
 
-                    filtered_jobs = []
                     for job in jobs:
                         if not is_recent(job.get("posted", "")):
                             continue
-
                         if not is_allowed_title(job.get("title", "")):
                             continue
-
-                        filtered_jobs.append(job)
-
-                    if filtered_jobs:
-                        filtered_jobs = enrich_jobs_with_descriptions(filtered_jobs)
-                        results.extend(filtered_jobs)
+                        results.append(job)
 
                 except Exception as e:
                     print(f"LinkedIn fetch failed for {keyword} | {location} | start={start}: {e}")
 
                 time.sleep(REQUEST_SLEEP_SECONDS)
 
-    final_jobs = dedupe_jobs(results)
+    results = dedupe_jobs(results)
 
-    # Keep only fields your backend expects
+    # only enrich a small batch first for stability
+    for job in results[:DETAIL_FETCH_LIMIT]:
+        job_id = job.get("job_id")
+        if job_id:
+            job["description"] = fetch_job_description(job_id)
+            time.sleep(DETAIL_REQUEST_SLEEP_SECONDS)
+
     return [
         {
             "title": job.get("title", ""),
@@ -364,5 +289,5 @@ def pull_linkedin_jobs() -> list[dict]:
             "posted": job.get("posted", ""),
             "description": job.get("description", ""),
         }
-        for job in final_jobs
+        for job in results
     ]
