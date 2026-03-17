@@ -13,6 +13,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from dotenv import load_dotenv
 import os
+import re
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -88,16 +89,225 @@ def parse_posted_at(value):
         return None
 
 
+def normalize_spaces(value: str | None) -> str:
+    return re.sub(r"\s+", " ", (value or "")).strip()
+
+
+def extract_experience_info(title: str | None, description: str | None):
+    title_text = normalize_spaces(title).lower()
+    desc_text = normalize_spaces(description).lower()
+    combined = f"{title_text} {desc_text}".strip()
+
+    if not combined:
+        return {
+            "min_experience_years": None,
+            "max_experience_years": None,
+            "experience_level": "unknown",
+            "experience_display": "Unknown",
+        }
+
+    senior_title_keywords = [
+        "senior",
+        "sr ",
+        "sr.",
+        "staff",
+        "principal",
+        "director",
+        "manager",
+        "lead",
+    ]
+
+    junior_keywords = [
+        "entry level",
+        "entry-level",
+        "junior",
+        "jr ",
+        "jr.",
+        "new grad",
+        "new graduate",
+        "graduate",
+        "early career",
+        "campus hire",
+    ]
+
+    # Explicit entry-level style
+    for kw in junior_keywords:
+        if kw in combined:
+            return {
+                "min_experience_years": 0,
+                "max_experience_years": 2,
+                "experience_level": "entry",
+                "experience_display": "0-2",
+            }
+
+    # Match ranges like 1-3 years / 2 to 4 years / 5–7 years
+    range_patterns = [
+        r"(\d{1,2})\s*[-–]\s*(\d{1,2})\s*\+?\s*(?:years|year|yrs|yr)",
+        r"(\d{1,2})\s*(?:to)\s*(\d{1,2})\s*\+?\s*(?:years|year|yrs|yr)",
+        r"(?:minimum of\s*)?(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(?:years|year|yrs|yr)",
+    ]
+
+    for pattern in range_patterns:
+        match = re.search(pattern, combined, flags=re.IGNORECASE)
+        if match:
+            min_years = int(match.group(1))
+            max_years = int(match.group(2))
+            if max_years < min_years:
+                min_years, max_years = max_years, min_years
+
+            level = "mid"
+            if max_years <= 2:
+                level = "entry"
+            elif min_years >= 6:
+                level = "senior"
+
+            return {
+                "min_experience_years": min_years,
+                "max_experience_years": max_years,
+                "experience_level": level,
+                "experience_display": f"{min_years}-{max_years}",
+            }
+
+    # Match 3+ years / 6+ years
+    plus_patterns = [
+        r"(\d{1,2})\s*\+\s*(?:years|year|yrs|yr)",
+        r"(?:at least|minimum of|min\.?)\s*(\d{1,2})\s*(?:years|year|yrs|yr)",
+        r"(\d{1,2})\s*(?:years|year|yrs|yr)\s*(?:of experience)?\s*(?:required|preferred|minimum)?",
+    ]
+
+    for pattern in plus_patterns:
+        match = re.search(pattern, combined, flags=re.IGNORECASE)
+        if match:
+            min_years = int(match.group(1))
+            level = "mid"
+            if min_years <= 2:
+                level = "entry"
+            elif min_years >= 6:
+                level = "senior"
+
+            return {
+                "min_experience_years": min_years,
+                "max_experience_years": None,
+                "experience_level": level,
+                "experience_display": f"{min_years}+",
+            }
+
+    # Title-based inference fallback
+    for kw in senior_title_keywords:
+        if kw in title_text:
+            return {
+                "min_experience_years": 6,
+                "max_experience_years": None,
+                "experience_level": "senior",
+                "experience_display": "6+",
+            }
+
+    return {
+        "min_experience_years": None,
+        "max_experience_years": None,
+        "experience_level": "unknown",
+        "experience_display": "Unknown",
+    }
+
+
+def extract_work_mode(location: str | None, description: str | None):
+    location_text = normalize_spaces(location).lower()
+    desc_text = normalize_spaces(description).lower()
+    combined = f"{location_text} {desc_text}"
+
+    if any(token in combined for token in ["hybrid", "remote/onsite", "remote / onsite", "remote and onsite"]):
+        return "Hybrid"
+
+    if any(token in combined for token in ["remote", "work from home", "wfh", "telecommute", "telework"]):
+        return "Remote"
+
+    if any(token in combined for token in ["on-site", "onsite", "on site", "in office", "in-person", "in person"]):
+        return "Onsite"
+
+    return "Unknown"
+
+
+def extract_job_type(title: str | None, description: str | None):
+    combined = f"{normalize_spaces(title).lower()} {normalize_spaces(description).lower()}"
+
+    if any(token in combined for token in ["full-time", "full time"]):
+        return "Full-time"
+
+    if any(token in combined for token in ["contract", "contractor", "1099", "c2c", "corp to corp"]):
+        return "Contract"
+
+    if any(token in combined for token in ["part-time", "part time"]):
+        return "Part-time"
+
+    if any(token in combined for token in ["intern", "internship"]):
+        return "Internship"
+
+    if any(token in combined for token in ["temporary", "temp"]):
+        return "Temporary"
+
+    return "Unknown"
+
+
+def should_hide_due_to_experience(
+    min_experience_years: int | None,
+    max_experience_years: int | None,
+    experience_level: str | None,
+    experience_display: str | None,
+):
+    display = (experience_display or "").strip().lower()
+    level = (experience_level or "").strip().lower()
+
+    # Hide 6+
+    if display == "6+":
+        return True
+
+    # Hide anything whose minimum required experience is 6 or above
+    if min_experience_years is not None and min_experience_years >= 6:
+        return True
+
+    # Hide ranges like 5-7 or 6-8 when upper bound is 6 or above and range clearly targets senior requirements
+    if max_experience_years is not None and max_experience_years >= 7:
+        return True
+
+    if level == "senior" and min_experience_years is None:
+        return True
+
+    return False
+
+
 def normalize_job(job: dict):
+    title = clean_text(job.get("title")) or "Untitled Job"
+    description = clean_text(job.get("description"))
+    location = clean_text(job.get("location")) or "Unknown"
+
+    experience_info = extract_experience_info(title, description)
+    work_mode = extract_work_mode(location, description)
+    job_type = extract_job_type(title, description)
+    auto_hide = should_hide_due_to_experience(
+        experience_info["min_experience_years"],
+        experience_info["max_experience_years"],
+        experience_info["experience_level"],
+        experience_info["experience_display"],
+    )
+
+    auto_skipped_reason = "experience_6_plus" if auto_hide else None
+
     return {
         "external_id": clean_text(job.get("external_id")),
-        "title": clean_text(job.get("title")) or "Untitled Job",
+        "title": title,
         "company": clean_text(job.get("company")) or "Unknown",
-        "location": clean_text(job.get("location")) or "Unknown",
+        "location": location,
         "url": clean_text(job.get("url")),
         "source": normalize_source_value(job.get("source")),
-        "description": clean_text(job.get("description")),
+        "description": description,
         "posted_at": parse_posted_at(job.get("posted_at")),
+        "min_experience_years": experience_info["min_experience_years"],
+        "max_experience_years": experience_info["max_experience_years"],
+        "experience_level": experience_info["experience_level"],
+        "experience_display": experience_info["experience_display"],
+        "work_mode": work_mode,
+        "job_type": job_type,
+        "auto_skipped_reason": auto_skipped_reason,
     }
 
 
@@ -121,6 +331,14 @@ class Job(Base):
     posted_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="new", nullable=False)
     applied_at = Column(DateTime, nullable=True)
+
+    min_experience_years = Column(Integer, nullable=True)
+    max_experience_years = Column(Integer, nullable=True)
+    experience_level = Column(String, nullable=True)
+    experience_display = Column(String, nullable=True)
+    work_mode = Column(String, nullable=True)
+    job_type = Column(String, nullable=True)
+    auto_skipped_reason = Column(String, nullable=True)
 
 
 # -----------------------------
@@ -162,51 +380,40 @@ def ensure_jobs_schema():
                 description TEXT NULL,
                 posted_at TIMESTAMP NULL,
                 status VARCHAR NOT NULL DEFAULT 'new',
-                applied_at TIMESTAMP NULL
+                applied_at TIMESTAMP NULL,
+                min_experience_years INTEGER NULL,
+                max_experience_years INTEGER NULL,
+                experience_level VARCHAR NULL,
+                experience_display VARCHAR NULL,
+                work_mode VARCHAR NULL,
+                job_type VARCHAR NULL,
+                auto_skipped_reason VARCHAR NULL
             )
         """))
 
-        db.execute(text("""
-            ALTER TABLE jobs
-            ADD COLUMN IF NOT EXISTS description TEXT
-        """))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS description TEXT"))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP"))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'new'"))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP"))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS min_experience_years INTEGER"))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS max_experience_years INTEGER"))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS experience_level VARCHAR"))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS experience_display VARCHAR"))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS work_mode VARCHAR"))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS job_type VARCHAR"))
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS auto_skipped_reason VARCHAR"))
 
-        db.execute(text("""
-            ALTER TABLE jobs
-            ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP
-        """))
-
-        db.execute(text("""
-            ALTER TABLE jobs
-            ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'new'
-        """))
-
-        db.execute(text("""
-            ALTER TABLE jobs
-            ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP
-        """))
-
-        db.execute(text("""
-            CREATE INDEX IF NOT EXISTS ix_jobs_external_id ON jobs (external_id)
-        """))
-        db.execute(text("""
-            CREATE INDEX IF NOT EXISTS ix_jobs_source ON jobs (source)
-        """))
-        db.execute(text("""
-            CREATE INDEX IF NOT EXISTS ix_jobs_title ON jobs (title)
-        """))
-        db.execute(text("""
-            CREATE INDEX IF NOT EXISTS ix_jobs_company ON jobs (company)
-        """))
-        db.execute(text("""
-            CREATE INDEX IF NOT EXISTS ix_jobs_location ON jobs (location)
-        """))
-        db.execute(text("""
-            CREATE INDEX IF NOT EXISTS ix_jobs_posted_at ON jobs (posted_at)
-        """))
-        db.execute(text("""
-            CREATE INDEX IF NOT EXISTS ix_jobs_status ON jobs (status)
-        """))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_external_id ON jobs (external_id)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_source ON jobs (source)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_title ON jobs (title)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_company ON jobs (company)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_location ON jobs (location)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_posted_at ON jobs (posted_at)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_status ON jobs (status)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_min_experience_years ON jobs (min_experience_years)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_experience_level ON jobs (experience_level)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_work_mode ON jobs (work_mode)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_job_type ON jobs (job_type)"))
 
         db.execute(text("""
             DO $$
@@ -259,12 +466,18 @@ def save_jobs(jobs):
 
             key = (job["external_id"], job["source"])
 
-            # remove duplicates inside the same incoming batch
             if key in seen_keys:
                 skipped += 1
                 continue
 
             seen_keys.add(key)
+
+            # auto-skip 6+ experience jobs
+            if job["auto_skipped_reason"]:
+                job["status"] = "skipped"
+            else:
+                job["status"] = "new"
+
             normalized_jobs.append(job)
 
         if not normalized_jobs:
@@ -291,29 +504,40 @@ def save_jobs(jobs):
             if existing:
                 changed = False
 
-                if existing.title != job["title"]:
-                    existing.title = job["title"]
-                    changed = True
+                updatable_fields = [
+                    "title",
+                    "company",
+                    "location",
+                    "url",
+                    "description",
+                    "posted_at",
+                    "min_experience_years",
+                    "max_experience_years",
+                    "experience_level",
+                    "experience_display",
+                    "work_mode",
+                    "job_type",
+                    "auto_skipped_reason",
+                ]
 
-                if existing.company != job["company"]:
-                    existing.company = job["company"]
-                    changed = True
+                for field in updatable_fields:
+                    if getattr(existing, field) != job[field]:
+                        setattr(existing, field, job[field])
+                        changed = True
 
-                if existing.location != job["location"]:
-                    existing.location = job["location"]
-                    changed = True
+                # keep manual statuses unless current row is still new/skipped-from-auto
+                existing_auto_skip = should_hide_due_to_experience(
+                    job["min_experience_years"],
+                    job["max_experience_years"],
+                    job["experience_level"],
+                    job["experience_display"],
+                )
 
-                if existing.url != job["url"]:
-                    existing.url = job["url"]
-                    changed = True
-
-                if existing.description != job["description"]:
-                    existing.description = job["description"]
-                    changed = True
-
-                if existing.posted_at != job["posted_at"]:
-                    existing.posted_at = job["posted_at"]
-                    changed = True
+                if existing.status in {"new", "skipped"}:
+                    desired_status = "skipped" if existing_auto_skip else "new"
+                    if existing.status != desired_status:
+                        existing.status = desired_status
+                        changed = True
 
                 if changed:
                     updated += 1

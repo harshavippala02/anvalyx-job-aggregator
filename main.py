@@ -31,6 +31,7 @@ from database import (
     ensure_jobs_schema,
     normalize_source_value,
     update_job_status,
+    should_hide_due_to_experience,
 )
 
 from adzuna_client import fetch_adzuna_jobs
@@ -104,7 +105,7 @@ def normalize_linkedin_jobs(raw_jobs):
             "location": (job.get("location") or "").strip() or "Unknown",
             "url": url,
             "source": "linkedin",
-            "description": "",
+            "description": job.get("description") or "",
             "posted_at": posted_at,
         })
 
@@ -264,7 +265,14 @@ def serialize_job(j: Job):
         "source": j.source,
         "description": j.description,
         "status": j.status,
-        "posted": j.posted_at.isoformat() if j.posted_at else None
+        "posted": j.posted_at.isoformat() if j.posted_at else None,
+        "min_experience_years": j.min_experience_years,
+        "max_experience_years": j.max_experience_years,
+        "experience_level": j.experience_level,
+        "experience_display": j.experience_display or "Unknown",
+        "work_mode": j.work_mode or "Unknown",
+        "job_type": j.job_type or "Unknown",
+        "auto_skipped_reason": j.auto_skipped_reason,
     }
 
 
@@ -326,6 +334,31 @@ def apply_days_bucket_filter(query, days: int):
 
     return query
 
+
+def apply_default_experience_visibility(query, status: str | None):
+    # Hide 6+ jobs from main Jobs view only.
+    # Saved/Applied/Skipped views are allowed to show whatever was explicitly saved/applied/skipped.
+    if status is None or status == "new":
+        query = query.filter(
+            or_(
+                Job.min_experience_years.is_(None),
+                Job.min_experience_years < 6
+            )
+        ).filter(
+            or_(
+                Job.experience_display.is_(None),
+                Job.experience_display != "6+"
+            )
+        ).filter(
+            or_(
+                Job.auto_skipped_reason.is_(None),
+                Job.auto_skipped_reason != "experience_6_plus"
+            )
+        )
+
+    return query
+
+
 @app.get("/jobs/summary")
 def jobs_summary(search: str | None = None):
     db: Session = SessionLocal()
@@ -343,6 +376,8 @@ def jobs_summary(search: str | None = None):
                 )
             )
 
+        jobs_base = apply_default_experience_visibility(base_query, "new")
+
         def count_with_days_and_status(days_value=None, status_value=None):
             q = base_query
 
@@ -350,6 +385,7 @@ def jobs_summary(search: str | None = None):
                 q = q.filter(Job.status == status_value)
             else:
                 q = q.filter(Job.status == "new")
+                q = apply_default_experience_visibility(q, "new")
 
             if days_value is not None:
                 q = apply_days_bucket_filter(q, days_value)
@@ -358,7 +394,7 @@ def jobs_summary(search: str | None = None):
 
         summary = {
             "status_counts": {
-                "jobs": base_query.filter(Job.status == "new").count(),
+                "jobs": jobs_base.filter(Job.status == "new").count(),
                 "saved": base_query.filter(Job.status == "saved").count(),
                 "applied": base_query.filter(Job.status == "applied").count(),
                 "skipped": base_query.filter(Job.status == "skipped").count(),
@@ -403,6 +439,8 @@ def get_jobs(
 
         if status:
             query = query.filter(Job.status == status)
+
+        query = apply_default_experience_visibility(query, status)
 
         if fresh_only:
             cutoff = datetime.utcnow() - timedelta(days=7)
@@ -462,7 +500,19 @@ def get_fresh_jobs(
             .filter(Job.posted_at.isnot(None))
             .filter(Job.posted_at >= cutoff)
             .filter(Job.source.in_(ACTIVE_SOURCES))
-            .filter(Job.status != "applied")
+            .filter(Job.status == "new")
+            .filter(
+                or_(
+                    Job.min_experience_years.is_(None),
+                    Job.min_experience_years < 6
+                )
+            )
+            .filter(
+                or_(
+                    Job.experience_display.is_(None),
+                    Job.experience_display != "6+"
+                )
+            )
             .order_by(Job.posted_at.desc().nullslast(), Job.id.desc())
             .offset(offset)
             .limit(limit)
@@ -489,7 +539,19 @@ def get_older_jobs(
             .filter(Job.posted_at < end)
             .filter(Job.posted_at >= start)
             .filter(Job.source.in_(ACTIVE_SOURCES))
-            .filter(Job.status != "applied")
+            .filter(Job.status == "new")
+            .filter(
+                or_(
+                    Job.min_experience_years.is_(None),
+                    Job.min_experience_years < 6
+                )
+            )
+            .filter(
+                or_(
+                    Job.experience_display.is_(None),
+                    Job.experience_display != "6+"
+                )
+            )
             .order_by(Job.posted_at.desc().nullslast(), Job.id.desc())
             .offset(offset)
             .limit(limit)

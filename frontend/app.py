@@ -32,6 +32,9 @@ if "search_query" not in st.session_state:
 if "job_view" not in st.session_state:
     st.session_state.job_view = "jobs"   # jobs, saved, applied, skipped
 
+if "ats_cache" not in st.session_state:
+    st.session_state.ats_cache = {}
+
 # ---------------- CUSTOM CSS ----------------
 
 st.markdown("""
@@ -131,6 +134,38 @@ footer { display: none !important; }
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
 }
 
+.info-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 14px;
+    margin-bottom: 16px;
+}
+
+.info-box {
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 12px 10px;
+}
+
+.info-label {
+    font-size: 12px;
+    color: #6b7280;
+    margin-bottom: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.info-value {
+    font-size: 14px;
+    color: #111827;
+    font-weight: 700;
+    line-height: 1.35;
+    word-break: break-word;
+}
+
 .upload-box {
     border: 2px dashed #d1d5db;
     padding: 42px;
@@ -220,6 +255,26 @@ def refresh_linkedin_jobs():
         return None
 
 
+def fetch_ats_score(job_id):
+    cache = st.session_state.ats_cache
+
+    if job_id in cache:
+        return cache[job_id]
+
+    try:
+        res = requests.get(f"{BACKEND_BASE}/ats/score/job/{job_id}", timeout=12)
+        if res.status_code == 200:
+            data = res.json()
+            score = data.get("score", None)
+            cache[job_id] = score
+            return score
+    except Exception:
+        pass
+
+    cache[job_id] = None
+    return None
+
+
 def format_posted_display(raw):
     if not raw:
         return "Unknown"
@@ -271,6 +326,43 @@ def current_view_label():
     return mapping.get(st.session_state.job_view, "Jobs")
 
 
+def build_location_display(job):
+    work_mode = job.get("work_mode") or "Unknown"
+    location = job.get("location") or "Unknown"
+    return f"{work_mode} • {location}"
+
+
+def render_info_boxes(job, ats_score):
+    experience_value = job.get("experience_display") or "Unknown"
+    location_value = build_location_display(job)
+    job_type_value = job.get("job_type") or "Unknown"
+    ats_value = f"{ats_score}%" if ats_score is not None else "--"
+
+    st.markdown(
+        f"""
+        <div class="info-grid">
+            <div class="info-box">
+                <div class="info-label">Experience</div>
+                <div class="info-value">{experience_value}</div>
+            </div>
+            <div class="info-box">
+                <div class="info-label">Location</div>
+                <div class="info-value">{location_value}</div>
+            </div>
+            <div class="info-box">
+                <div class="info-label">Job Type</div>
+                <div class="info-value">{job_type_value}</div>
+            </div>
+            <div class="info-box">
+                <div class="info-label">ATS Score</div>
+                <div class="info-value">{ats_value}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
 def render_job_card(job):
     st.markdown('<div class="job-card">', unsafe_allow_html=True)
 
@@ -287,6 +379,9 @@ def render_job_card(job):
         apply_url = job.get("apply_url")
         if apply_url:
             st.link_button("Apply", apply_url)
+
+    ats_score = fetch_ats_score(job.get("id"))
+    render_info_boxes(job, ats_score)
 
     job_id = job.get("id", job.get("title", "job"))
 
@@ -312,28 +407,6 @@ def render_job_card(job):
                 st.rerun()
             else:
                 st.warning("Could not update status")
-
-    if st.button("Check ATS Score", key=f"ats_{job_id}"):
-        try:
-            res = requests.get(f"{BACKEND_BASE}/ats/score/job/{job_id}", timeout=20)
-
-            if res.status_code == 200:
-                data = res.json()
-                st.metric("ATS Score", f"{data.get('score', 0)}%")
-
-                if data.get("strengths"):
-                    st.success("Strengths")
-                    for s in data["strengths"]:
-                        st.write(f"• {s}")
-
-                if data.get("gaps"):
-                    st.warning("Skill Gaps")
-                    for g in data["gaps"]:
-                        st.write(f"• {g}")
-            else:
-                st.warning("Could not fetch ATS score.")
-        except Exception:
-            st.warning("ATS service is not reachable right now.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -414,7 +487,6 @@ elif st.session_state.page == "jobs":
     status_counts = summary.get("status_counts", {})
     day_counts = summary.get("day_counts", {})
 
-    # Top status boxes with counts
     s1, s2, s3, s4 = st.columns([1, 1, 1, 1])
 
     with s1:
@@ -439,7 +511,6 @@ elif st.session_state.page == "jobs":
 
     st.caption(f"Current view: {current_view_label()}")
 
-    # Compact day filters with counts
     d1, d2, d3, d4, d5, d6, d7 = st.columns([1, 1, 1, 1, 1, 1, 5])
 
     with d1:
@@ -505,7 +576,7 @@ elif st.session_state.page == "jobs":
     )
 
     if st.session_state.job_view == "jobs":
-        caption_text = f"Showing active jobs posted {label}"
+        caption_text = f"Showing active jobs posted {label} with 6+ years hidden"
     else:
         caption_text = f"Showing {current_view_label().lower()} jobs posted {label}"
 
@@ -553,6 +624,7 @@ elif st.session_state.page == "resume":
                 )
 
                 if res.status_code in (200, 201):
+                    st.session_state.ats_cache = {}
                     st.success("Resume saved successfully")
                 else:
                     st.warning("Resume upload failed.")
