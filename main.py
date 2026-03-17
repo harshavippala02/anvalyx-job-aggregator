@@ -169,7 +169,6 @@ def refresh_all_sources():
 def startup_event():
     init_db()
     ensure_jobs_schema()
-    refresh_all_sources()
 
     scheduler.add_job(
         refresh_usajobs,
