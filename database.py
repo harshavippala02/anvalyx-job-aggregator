@@ -37,7 +37,7 @@ SessionLocal = sessionmaker(
 
 Base = declarative_base()
 
-ACTIVE_SOURCES = ["usajobs", "adzuna", "linkedin"]
+ACTIVE_SOURCES = ["usajobs", "adzuna", "linkedin","jsearch"]
 
 
 # -----------------------------
@@ -55,6 +55,7 @@ def normalize_source_value(source):
         "adzuna": "adzuna",
         "linkedin": "linkedin",
         "linkedin_public": "linkedin",
+        "jsearch": "jsearch",
     }
 
     return mapping.get(s, s)
@@ -613,6 +614,7 @@ def get_job_counts():
         greenhouse = db.query(Job).filter(Job.source == "greenhouse").count()
         lever = db.query(Job).filter(Job.source == "lever").count()
         apify = db.query(Job).filter(Job.source == "apify").count()
+        jsearch = db.query(Job).filter(Job.source == "jsearch").count()
 
         applied = db.query(Job).filter(Job.status == "applied").count()
         saved = db.query(Job).filter(Job.status == "saved").count()
@@ -624,6 +626,7 @@ def get_job_counts():
             "usajobs": usajobs,
             "adzuna": adzuna,
             "linkedin": linkedin,
+            "jsearch": jsearch,
             "greenhouse": greenhouse,
             "lever": lever,
             "apify": apify,

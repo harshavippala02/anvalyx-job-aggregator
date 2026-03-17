@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from datetime import datetime, timedelta
 from linkedin_client import pull_linkedin_jobs
+from jsearch_client import fetch_jsearch_jobs
 
 # --------------------------------------------------
 # ENV
@@ -154,12 +155,25 @@ def refresh_linkedin_source():
     except Exception as e:
         print(f"⚠️ LinkedIn skipped: {e}")
 
+def refresh_jsearch():
+    print("🔄 JSearch refresh started")
+    try:
+        jobs = fetch_jsearch_jobs() or []
+        result = save_jobs(jobs)
+        print(
+            f"✅ JSearch refreshed | fetched={len(jobs)} "
+            f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}"
+        )
+    except Exception as e:
+        print(f"⚠️ JSearch skipped: {e}")
+
 
 def refresh_all_sources():
     print("🚀 Full refresh cycle started")
     refresh_usajobs()
     refresh_adzuna()
     refresh_linkedin_source()
+    refresh_jsearch()
     print("✅ Full refresh cycle finished")
 
 
@@ -192,6 +206,14 @@ def startup_event():
         "interval",
         hours=4,
         id="refresh_linkedin",
+        replace_existing=True
+    )
+
+    scheduler.add_job(
+        refresh_jsearch,
+        "interval",
+        hours=6,
+        id="refresh_jsearch",
         replace_existing=True
     )
 
@@ -250,6 +272,18 @@ def refresh_linkedin():
         "skipped": result["skipped"],
     }
 
+@app.post("/refresh-jsearch")
+def refresh_jsearch_endpoint():
+    jobs = fetch_jsearch_jobs() or []
+    result = save_jobs(jobs)
+
+    return {
+        "status": "ok",
+        "fetched": len(jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
 
 # --------------------------------------------------
 # Helpers
