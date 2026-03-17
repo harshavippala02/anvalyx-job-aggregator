@@ -117,16 +117,19 @@ def normalize_linkedin_jobs(raw_jobs):
 # Refresh functions
 # --------------------------------------------------
 def refresh_usajobs():
-    print("🔄 USAJobs refresh started")
-    try:
-        jobs = fetch_usajobs() or []
-        result = save_jobs(jobs)
-        print(
-            f"✅ USAJobs refreshed | fetched={len(jobs)} "
-            f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}"
-        )
-    except Exception as e:
-        print(f"❌ USAJobs failed: {e}")
+    print("Fetching USAJobs...", flush=True)
+
+    jobs = fetch_usajobs()
+
+    result = save_jobs(jobs)
+
+    return {
+        "status": "ok",
+        "fetched": len(jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
 
 
 def refresh_adzuna():

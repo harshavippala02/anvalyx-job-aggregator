@@ -4,6 +4,7 @@ from datetime import datetime
 
 USAJOBS_API_URL = "https://data.usajobs.gov/api/search"
 
+
 def fetch_usajobs():
     headers = {
         "User-Agent": os.getenv("USAJOBS_USER_AGENT"),
@@ -17,25 +18,51 @@ def fetch_usajobs():
         "ResultsPerPage": 25
     }
 
-    response = requests.get(USAJOBS_API_URL, headers=headers, params=params)
+    response = requests.get(
+        USAJOBS_API_URL,
+        headers=headers,
+        params=params,
+        timeout=20
+    )
+
     response.raise_for_status()
 
     data = response.json()
-    results = data["SearchResult"]["SearchResultItems"]
+
+    items = data.get("SearchResult", {}).get("SearchResultItems", [])
 
     jobs = []
 
-    for item in results:
-        job = item["MatchedObjectDescriptor"]
+    for item in items:
+
+        job = item.get("MatchedObjectDescriptor", {})
+
+        if not job:
+            continue
+
+        location = "Unknown"
+        locations = job.get("PositionLocation", [])
+        if locations:
+            location = locations[0].get("LocationName", "Unknown")
+
+        posted = job.get("PublicationStartDate")
+
+        posted_dt = None
+        if posted:
+            try:
+                posted_dt = datetime.fromisoformat(posted.replace("Z", ""))
+            except Exception:
+                posted_dt = None
 
         jobs.append({
-            "external_id": job["PositionID"],
-            "title": job["PositionTitle"],
-            "company": job["OrganizationName"],
-            "location": job["PositionLocation"][0]["LocationName"],
-            "url": job["PositionURI"],
+            "external_id": f"usajobs_{job.get('PositionID')}",
+            "title": job.get("PositionTitle"),
+            "company": job.get("OrganizationName"),
+            "location": location,
+            "url": job.get("PositionURI"),
             "source": "usajobs",
-            "posted_at": datetime.fromisoformat(job["PublicationStartDate"].replace("Z", ""))
+            "description": job.get("UserArea", {}).get("Details", {}).get("JobSummary", ""),
+            "posted_at": posted_dt
         })
 
     return jobs
