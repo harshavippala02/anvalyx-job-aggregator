@@ -234,7 +234,7 @@ def ensure_jobs_schema():
 # -----------------------------
 # Job helpers
 # -----------------------------
-ddef save_jobs(jobs):
+def save_jobs(jobs):
     db = SessionLocal()
     inserted = 0
     updated = 0
