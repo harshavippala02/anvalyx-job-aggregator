@@ -1,9 +1,12 @@
+import re
 import time
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BASE_URL = "https://www.linkedin.com/jobs/search"
+DETAIL_URL_TEMPLATE = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
 
 HEADERS = {
     "User-Agent": (
@@ -12,9 +15,9 @@ HEADERS = {
         "Chrome/122.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.linkedin.com/jobs/",
 }
 
-# Broad enough to find volume, filtered later by title rules.
 KEYWORDS = [
     "Data Analyst",
     "Business Analyst",
@@ -29,7 +32,6 @@ KEYWORDS = [
     "Decision Scientist",
 ]
 
-# You can add/remove locations depending on your needs.
 LOCATIONS = [
     "United States",
     "Remote",
@@ -57,6 +59,8 @@ ALLOWED_TITLES = [
     "commercial analyst",
     "financial reporting analyst",
     "data reporting analyst",
+    "sales operations analyst",
+    "operations analytics analyst",
 ]
 
 BLOCKED_TITLES = [
@@ -65,23 +69,15 @@ BLOCKED_TITLES = [
     "ml engineer",
     "software engineer",
     "ai engineer",
-    "scientist",
-    "staff",
-    "principal",
-    "director",
-    "manager",
     "architect",
     "recruiter",
 ]
 
-# Shallow pagination is usually enough for daily runs.
 START_OFFSETS = [0, 25, 50]
-
-# r259200 = 3 days in seconds
-TIME_FILTER = "r259200"
-
-# Keep this modest. You're using many queries already.
-REQUEST_SLEEP_SECONDS = 1.5
+TIME_FILTER = "r259200"  # last 3 days
+REQUEST_SLEEP_SECONDS = 1.0
+DETAIL_REQUEST_SLEEP_SECONDS = 0.15
+DETAIL_MAX_WORKERS = 8
 
 
 def build_url(keyword: str, location: str, start: int = 0) -> str:
@@ -99,6 +95,65 @@ def fetch_page(url: str) -> str:
     response = requests.get(url, headers=HEADERS, timeout=30)
     response.raise_for_status()
     return response.text
+
+
+def extract_job_id_from_url(url: str) -> str | None:
+    if not url:
+        return None
+
+    # Typical LinkedIn URL:
+    # https://www.linkedin.com/jobs/view/job-title-4386531478
+    match = re.search(r"/jobs/view/(?:[^/]+-)?(\d+)", url)
+    if match:
+        return match.group(1)
+
+    parsed = urlparse(url)
+    path_match = re.search(r"(\d+)", parsed.path or "")
+    if path_match:
+        return path_match.group(1)
+
+    return None
+
+
+def clean_description_text(text: str) -> str:
+    if not text:
+        return ""
+
+    text = re.sub(r"\r", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return text.strip()
+
+
+def fetch_job_description(job_id: str) -> str:
+    if not job_id:
+        return ""
+
+    detail_url = DETAIL_URL_TEMPLATE.format(job_id=job_id)
+
+    try:
+        response = requests.get(detail_url, headers=HEADERS, timeout=30)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        description_el = (
+            soup.select_one(".show-more-less-html__markup")
+            or soup.select_one(".description__text")
+            or soup.select_one(".job-search__description")
+            or soup.select_one("section.show-more-less-html")
+            or soup.select_one("div.show-more-less-html__markup")
+        )
+
+        if not description_el:
+            return ""
+
+        description = description_el.get_text("\n", strip=True)
+        return clean_description_text(description)
+
+    except Exception as e:
+        print(f"LinkedIn detail fetch failed for job_id={job_id}: {e}")
+        return ""
 
 
 def parse_jobs(html: str) -> list[dict]:
@@ -136,16 +191,19 @@ def parse_jobs(html: str) -> list[dict]:
             location = location_el.get_text(" ", strip=True) if location_el else ""
             url = link_el.get("href", "").split("?")[0].strip()
             posted = time_el.get_text(" ", strip=True) if time_el else ""
+            job_id = extract_job_id_from_url(url)
 
-            if not url:
+            if not url or not job_id:
                 continue
 
             jobs.append({
+                "job_id": job_id,
                 "title": title,
                 "company": company,
                 "location": location,
                 "url": url,
                 "posted": posted,
+                "description": "",
             })
         except Exception:
             continue
@@ -181,9 +239,22 @@ def is_allowed_title(title: str) -> bool:
 
     t = title.lower().strip()
 
-    # Special case: keep analytics engineer
+    # Keep analytics engineer specifically
     if "analytics engineer" in t:
         return True
+
+    # Seniority blocking
+    senior_blockers = [
+        "staff",
+        "principal",
+        "director",
+        "manager",
+        "head of",
+        "vice president",
+        "vp ",
+    ]
+    if any(bad in t for bad in senior_blockers):
+        return False
 
     if any(bad in t for bad in BLOCKED_TITLES):
         return False
@@ -212,6 +283,41 @@ def dedupe_jobs(jobs: list[dict]) -> list[dict]:
     return output
 
 
+def enrich_jobs_with_descriptions(jobs: list[dict]) -> list[dict]:
+    if not jobs:
+        return jobs
+
+    enriched = []
+
+    with ThreadPoolExecutor(max_workers=DETAIL_MAX_WORKERS) as executor:
+        future_to_job = {
+            executor.submit(fetch_job_description, job["job_id"]): job
+            for job in jobs
+            if job.get("job_id")
+        }
+
+        for future in as_completed(future_to_job):
+            job = future_to_job[future]
+            try:
+                description = future.result() or ""
+            except Exception:
+                description = ""
+
+            job["description"] = description
+            enriched.append(job)
+
+            time.sleep(DETAIL_REQUEST_SLEEP_SECONDS)
+
+    # Preserve jobs that may not have been scheduled for any reason
+    enriched_by_url = {job["url"]: job for job in enriched}
+    final_jobs = []
+
+    for job in jobs:
+        final_jobs.append(enriched_by_url.get(job["url"], job))
+
+    return final_jobs
+
+
 def pull_linkedin_jobs() -> list[dict]:
     results = []
 
@@ -227,6 +333,7 @@ def pull_linkedin_jobs() -> list[dict]:
                     if not jobs:
                         break
 
+                    filtered_jobs = []
                     for job in jobs:
                         if not is_recent(job.get("posted", "")):
                             continue
@@ -234,11 +341,28 @@ def pull_linkedin_jobs() -> list[dict]:
                         if not is_allowed_title(job.get("title", "")):
                             continue
 
-                        results.append(job)
+                        filtered_jobs.append(job)
+
+                    if filtered_jobs:
+                        filtered_jobs = enrich_jobs_with_descriptions(filtered_jobs)
+                        results.extend(filtered_jobs)
 
                 except Exception as e:
                     print(f"LinkedIn fetch failed for {keyword} | {location} | start={start}: {e}")
 
                 time.sleep(REQUEST_SLEEP_SECONDS)
 
-    return dedupe_jobs(results)
+    final_jobs = dedupe_jobs(results)
+
+    # Keep only fields your backend expects
+    return [
+        {
+            "title": job.get("title", ""),
+            "company": job.get("company", ""),
+            "location": job.get("location", ""),
+            "url": job.get("url", ""),
+            "posted": job.get("posted", ""),
+            "description": job.get("description", ""),
+        }
+        for job in final_jobs
+    ]
