@@ -30,7 +30,7 @@ if "search_query" not in st.session_state:
     st.session_state.search_query = ""
 
 if "job_view" not in st.session_state:
-    st.session_state.job_view = "jobs"   # jobs, saved, applied, skipped
+    st.session_state.job_view = "jobs"
 
 if "ats_cache" not in st.session_state:
     st.session_state.ats_cache = {}
@@ -245,9 +245,9 @@ def update_job_status(job_id, status_value):
         return False
 
 
-def refresh_linkedin_jobs():
+def refresh_source_jobs(endpoint_path):
     try:
-        res = requests.post(f"{BACKEND_BASE}/refresh-linkedin", timeout=180)
+        res = requests.post(f"{BACKEND_BASE}{endpoint_path}", timeout=180)
         if res.status_code == 200:
             return res.json()
         return None
@@ -467,19 +467,60 @@ if st.session_state.page == "home":
 elif st.session_state.page == "jobs":
     st.title("Data Analytics Jobs")
 
-    r1c1, r1c2 = st.columns([1.2, 5])
+    st.subheader("Refresh Sources")
+    r1c1, r1c2, r1c3, r1c4 = st.columns(4)
 
     with r1c1:
+        if st.button("Refresh JSearch Jobs"):
+            result = refresh_source_jobs("/refresh-jsearch")
+            if result:
+                st.success(
+                    f"JSearch refreshed: fetched={result.get('fetched', 0)}, "
+                    f"inserted={result.get('inserted', 0)}, updated={result.get('updated', 0)}, "
+                    f"skipped={result.get('skipped', 0)}"
+                )
+                st.rerun()
+            else:
+                st.warning("Could not refresh JSearch jobs")
+
+    with r1c2:
         if st.button("Refresh LinkedIn Jobs"):
-            result = refresh_linkedin_jobs()
+            result = refresh_source_jobs("/refresh-linkedin")
             if result:
                 st.success(
                     f"LinkedIn refreshed: fetched={result.get('fetched', 0)}, "
-                    f"inserted={result.get('inserted', 0)}, updated={result.get('updated', 0)}"
+                    f"inserted={result.get('inserted', 0)}, updated={result.get('updated', 0)}, "
+                    f"skipped={result.get('skipped', 0)}"
                 )
                 st.rerun()
             else:
                 st.warning("Could not refresh LinkedIn jobs")
+
+    with r1c3:
+        if st.button("Refresh USAJobs Jobs"):
+            result = refresh_source_jobs("/refresh-usajobs")
+            if result:
+                st.success(
+                    f"USAJobs refreshed: fetched={result.get('fetched', 0)}, "
+                    f"inserted={result.get('inserted', 0)}, updated={result.get('updated', 0)}, "
+                    f"skipped={result.get('skipped', 0)}"
+                )
+                st.rerun()
+            else:
+                st.warning("Could not refresh USAJobs jobs")
+
+    with r1c4:
+        if st.button("Refresh Adzuna Jobs"):
+            result = refresh_source_jobs("/refresh-adzuna")
+            if result:
+                st.success(
+                    f"Adzuna refreshed: fetched={result.get('fetched', 0)}, "
+                    f"inserted={result.get('inserted', 0)}, updated={result.get('updated', 0)}, "
+                    f"skipped={result.get('skipped', 0)}"
+                )
+                st.rerun()
+            else:
+                st.warning("Could not refresh Adzuna jobs")
 
     st.write("")
 

@@ -2,7 +2,6 @@ from dotenv import load_dotenv
 import os
 import hashlib
 from fastapi import FastAPI, Query, HTTPException
-from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -32,7 +31,6 @@ from database import (
     ensure_jobs_schema,
     normalize_source_value,
     update_job_status,
-    should_hide_due_to_experience,
 )
 
 from adzuna_client import fetch_adzuna_jobs
@@ -45,11 +43,6 @@ from backend.ats.ats import router as ats_router
 # --------------------------------------------------
 app = FastAPI(title="Anvalyx Backend")
 app.include_router(ats_router)
-
-# --------------------------------------------------
-# Scheduler
-# --------------------------------------------------
-scheduler = BackgroundScheduler()
 
 
 # --------------------------------------------------
@@ -119,8 +112,7 @@ def normalize_linkedin_jobs(raw_jobs):
 def refresh_usajobs():
     print("Fetching USAJobs...", flush=True)
 
-    jobs = fetch_usajobs()
-
+    jobs = fetch_usajobs() or []
     result = save_jobs(jobs)
 
     return {
@@ -133,98 +125,95 @@ def refresh_usajobs():
 
 
 def refresh_adzuna():
-    print("🔄 Adzuna refresh started")
-    try:
-        jobs = fetch_adzuna_jobs() or []
-        result = save_jobs(jobs)
-        print(
-            f"✅ Adzuna refreshed | fetched={len(jobs)} "
-            f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}"
-        )
-    except Exception as e:
-        print(f"⚠️ Adzuna skipped: {e}")
+    print("🔄 Adzuna refresh started", flush=True)
+
+    jobs = fetch_adzuna_jobs() or []
+    result = save_jobs(jobs)
+
+    print(
+        f"✅ Adzuna refreshed | fetched={len(jobs)} "
+        f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}",
+        flush=True
+    )
+
+    return {
+        "status": "ok",
+        "fetched": len(jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
 
 
 def refresh_linkedin_source():
-    print("🔄 LinkedIn refresh started")
-    try:
-        raw_jobs = pull_linkedin_jobs() or []
-        jobs = normalize_linkedin_jobs(raw_jobs)
-        result = save_jobs(jobs)
-        print(
-            f"✅ LinkedIn refreshed | fetched={len(raw_jobs)} "
-            f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}"
-        )
-    except Exception as e:
-        print(f"⚠️ LinkedIn skipped: {e}")
+    print("🔄 LinkedIn refresh started", flush=True)
+
+    raw_jobs = pull_linkedin_jobs() or []
+    jobs = normalize_linkedin_jobs(raw_jobs)
+    result = save_jobs(jobs)
+
+    print(
+        f"✅ LinkedIn refreshed | fetched={len(raw_jobs)} "
+        f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}",
+        flush=True
+    )
+
+    return {
+        "status": "ok",
+        "fetched": len(raw_jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
+
 
 def refresh_jsearch():
-    print("🔄 JSearch refresh started")
-    try:
-        jobs = fetch_jsearch_jobs() or []
-        result = save_jobs(jobs)
-        print(
-            f"✅ JSearch refreshed | fetched={len(jobs)} "
-            f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}"
-        )
-    except Exception as e:
-        print(f"⚠️ JSearch skipped: {e}")
+    print("🔄 JSearch refresh started", flush=True)
+
+    jobs = fetch_jsearch_jobs() or []
+    result = save_jobs(jobs)
+
+    print(
+        f"✅ JSearch refreshed | fetched={len(jobs)} "
+        f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}",
+        flush=True
+    )
+
+    return {
+        "status": "ok",
+        "fetched": len(jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
 
 
 def refresh_all_sources():
-    print("🚀 Full refresh cycle started")
-    refresh_usajobs()
-    refresh_adzuna()
-    refresh_linkedin_source()
-    refresh_jsearch()
-    print("✅ Full refresh cycle finished")
+    print("🚀 Full refresh cycle started", flush=True)
+
+    results = {
+        "usajobs": refresh_usajobs(),
+        "adzuna": refresh_adzuna(),
+        "linkedin": refresh_linkedin_source(),
+        "jsearch": refresh_jsearch(),
+    }
+
+    print("✅ Full refresh cycle finished", flush=True)
+
+    return {
+        "status": "ok",
+        "results": results,
+    }
 
 
 # --------------------------------------------------
-# Startup / Shutdown
+# Startup
 # --------------------------------------------------
 @app.on_event("startup")
 def startup_event():
     init_db()
     ensure_jobs_schema()
-
-    scheduler.add_job(
-        refresh_linkedin_source,
-        "interval",
-        hours=4,
-        id="refresh_linkedin",
-        replace_existing=True
-    )
-
-    scheduler.add_job(
-        refresh_jsearch,
-        "interval",
-        hours=6,
-        id="refresh_jsearch",
-        replace_existing=True
-    )
-
-    if not scheduler.running:
-        scheduler.start()
-
-    # one-time delayed boot refresh
-    scheduler.add_job(
-        refresh_jsearch,
-        "date",
-        run_date=datetime.utcnow() + timedelta(seconds=20),
-        id="boot_refresh_jsearch",
-        replace_existing=True
-    )
-
-    print("✅ Scheduler started", flush=True)
-    print("🚀 Scheduled one-time delayed boot refresh: JSearch", flush=True)
-
-
-@app.on_event("shutdown")
-def shutdown_event():
-    if scheduler.running:
-        scheduler.shutdown()
-        print("🛑 Scheduler stopped")
+    print("✅ Backend started in manual refresh mode", flush=True)
 
 
 # --------------------------------------------------
@@ -234,7 +223,8 @@ def shutdown_event():
 def health():
     return {
         "status": "Anvalyx backend running",
-        "active_sources": ACTIVE_SOURCES
+        "active_sources": ACTIVE_SOURCES,
+        "refresh_mode": "manual_only",
     }
 
 
@@ -244,7 +234,7 @@ def health_head():
 
 
 # --------------------------------------------------
-# LinkedIn endpoints
+# Refresh endpoints
 # --------------------------------------------------
 @app.get("/pull-linkedin")
 def pull_linkedin():
@@ -257,30 +247,23 @@ def pull_linkedin():
 
 @app.post("/refresh-linkedin")
 def refresh_linkedin():
-    raw_jobs = pull_linkedin_jobs() or []
-    jobs = normalize_linkedin_jobs(raw_jobs)
-    result = save_jobs(jobs)
+    return refresh_linkedin_source()
 
-    return {
-        "status": "ok",
-        "fetched": len(raw_jobs),
-        "inserted": result["inserted"],
-        "updated": result["updated"],
-        "skipped": result["skipped"],
-    }
 
 @app.post("/refresh-jsearch")
 def refresh_jsearch_endpoint():
-    jobs = fetch_jsearch_jobs() or []
-    result = save_jobs(jobs)
+    return refresh_jsearch()
 
-    return {
-        "status": "ok",
-        "fetched": len(jobs),
-        "inserted": result["inserted"],
-        "updated": result["updated"],
-        "skipped": result["skipped"],
-    }
+
+@app.post("/refresh-usajobs")
+def refresh_usajobs_endpoint():
+    return refresh_usajobs()
+
+
+@app.post("/refresh-adzuna")
+def refresh_adzuna_endpoint():
+    return refresh_adzuna()
+
 
 # --------------------------------------------------
 # Helpers
@@ -367,8 +350,6 @@ def apply_days_bucket_filter(query, days: int):
 
 
 def apply_default_experience_visibility(query, status: str | None):
-    # Hide 6+ jobs from main Jobs view only.
-    # Saved/Applied/Skipped views are allowed to show whatever was explicitly saved/applied/skipped.
     if status is None or status == "new":
         query = query.filter(
             or_(
