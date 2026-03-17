@@ -327,6 +327,57 @@ def apply_days_bucket_filter(query, days: int):
 
     return query
 
+@app.get("/jobs/summary")
+def jobs_summary(search: str | None = None):
+    db: Session = SessionLocal()
+    try:
+        base_query = db.query(Job).filter(Job.source.in_(ACTIVE_SOURCES))
+
+        if search:
+            term = f"%{search.strip()}%"
+            base_query = base_query.filter(
+                or_(
+                    Job.title.ilike(term),
+                    Job.company.ilike(term),
+                    Job.location.ilike(term),
+                    Job.description.ilike(term)
+                )
+            )
+
+        def count_with_days_and_status(days_value=None, status_value=None):
+            q = base_query
+
+            if status_value:
+                q = q.filter(Job.status == status_value)
+            else:
+                q = q.filter(Job.status == "new")
+
+            if days_value is not None:
+                q = apply_days_bucket_filter(q, days_value)
+
+            return q.count()
+
+        summary = {
+            "status_counts": {
+                "jobs": base_query.filter(Job.status == "new").count(),
+                "saved": base_query.filter(Job.status == "saved").count(),
+                "applied": base_query.filter(Job.status == "applied").count(),
+                "skipped": base_query.filter(Job.status == "skipped").count(),
+            },
+            "day_counts": {
+                "1": count_with_days_and_status(1, None),
+                "3": count_with_days_and_status(3, None),
+                "5": count_with_days_and_status(5, None),
+                "7": count_with_days_and_status(7, None),
+                "10": count_with_days_and_status(10, None),
+                "30": count_with_days_and_status(30, None),
+            }
+        }
+
+        return summary
+    finally:
+        db.close()
+
 
 # --------------------------------------------------
 # Jobs API
@@ -338,6 +389,7 @@ def get_jobs(
     location: str | None = None,
     company: str | None = None,
     title: str | None = None,
+    status: str | None = None,
     fresh_only: bool = False,
     days: int | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -346,7 +398,12 @@ def get_jobs(
     db: Session = SessionLocal()
     try:
         query = db.query(Job).filter(Job.source.in_(ACTIVE_SOURCES))
-        query = query.filter(Job.status != "applied")
+
+        if not status:
+            query = query.filter(Job.status == "new")
+
+        if status:
+            query = query.filter(Job.status == status)
 
         if fresh_only:
             cutoff = datetime.utcnow() - timedelta(days=7)

@@ -29,6 +29,9 @@ if "filter_days" not in st.session_state:
 if "search_query" not in st.session_state:
     st.session_state.search_query = ""
 
+if "job_view" not in st.session_state:
+    st.session_state.job_view = "jobs"   # jobs, saved, applied, skipped
+
 # ---------------- CUSTOM CSS ----------------
 
 st.markdown("""
@@ -55,13 +58,13 @@ footer { display: none !important; }
 .stButton > button {
     background: white;
     border: 1px solid #e5e7eb;
-    padding: 10px 18px;
+    padding: 10px 16px;
     border-radius: 10px;
     font-weight: 500;
     color: #374151;
     white-space: nowrap;
-    min-width: 110px;
-    height: 48px;
+    min-width: 90px;
+    height: 46px;
 }
 
 .stButton > button:hover {
@@ -150,7 +153,7 @@ hr {
 
 # ---------------- HELPERS ----------------
 
-def fetch_jobs(days=1, search=""):
+def fetch_jobs(days=1, search="", status=None):
     try:
         params = {
             "days": days,
@@ -159,6 +162,9 @@ def fetch_jobs(days=1, search=""):
 
         if search and search.strip():
             params["search"] = search.strip()
+
+        if status:
+            params["status"] = status
 
         res = requests.get(f"{BACKEND_BASE}/jobs", params=params, timeout=20)
 
@@ -170,6 +176,26 @@ def fetch_jobs(days=1, search=""):
     except Exception:
         st.error("Backend not reachable")
         return []
+
+
+def fetch_summary(search=""):
+    try:
+        params = {}
+        if search and search.strip():
+            params["search"] = search.strip()
+
+        res = requests.get(f"{BACKEND_BASE}/jobs/summary", params=params, timeout=20)
+        if res.status_code == 200:
+            return res.json()
+        return {
+            "status_counts": {"jobs": 0, "saved": 0, "applied": 0, "skipped": 0},
+            "day_counts": {"1": 0, "3": 0, "5": 0, "7": 0, "10": 0, "30": 0},
+        }
+    except Exception:
+        return {
+            "status_counts": {"jobs": 0, "saved": 0, "applied": 0, "skipped": 0},
+            "day_counts": {"1": 0, "3": 0, "5": 0, "7": 0, "10": 0, "30": 0},
+        }
 
 
 def update_job_status(job_id, status_value):
@@ -186,7 +212,7 @@ def update_job_status(job_id, status_value):
 
 def refresh_linkedin_jobs():
     try:
-        res = requests.post(f"{BACKEND_BASE}/refresh-linkedin", timeout=120)
+        res = requests.post(f"{BACKEND_BASE}/refresh-linkedin", timeout=180)
         if res.status_code == 200:
             return res.json()
         return None
@@ -225,44 +251,64 @@ def parse_txt(file):
     return file.read().decode("utf-8", errors="ignore")
 
 
+def current_status_filter():
+    if st.session_state.job_view == "saved":
+        return "saved"
+    if st.session_state.job_view == "applied":
+        return "applied"
+    if st.session_state.job_view == "skipped":
+        return "skipped"
+    return None
+
+
+def current_view_label():
+    mapping = {
+        "jobs": "Jobs",
+        "saved": "Saved",
+        "applied": "Applied",
+        "skipped": "Skipped"
+    }
+    return mapping.get(st.session_state.job_view, "Jobs")
+
+
 def render_job_card(job):
     st.markdown('<div class="job-card">', unsafe_allow_html=True)
 
-    col1, col2 = st.columns([6, 1])
+    top_left, top_right = st.columns([6, 1])
 
-    with col1:
+    with top_left:
         st.subheader(job.get("title", "Untitled Role"))
         st.write(f"{job.get('company', 'Unknown Company')} • {job.get('location', 'Unknown Location')}")
         st.caption(
             f"{job.get('source', 'Unknown Source')} | Posted {format_posted_display(job.get('posted'))} | Status: {job.get('status', 'new')}"
         )
 
-    with col2:
+    with top_right:
         apply_url = job.get("apply_url")
         if apply_url:
             st.link_button("Apply", apply_url)
 
     job_id = job.get("id", job.get("title", "job"))
 
-    a1, a2, a3 = st.columns(3)
+    b1, b2, b3 = st.columns([1, 1, 1])
 
-    with a1:
+    with b1:
         if st.button("Applied", key=f"applied_{job_id}"):
             if update_job_status(job_id, "applied"):
                 st.rerun()
             else:
                 st.warning("Could not update status")
 
-    with a2:
-        if st.button("Saved", key=f"saved_{job_id}"):
-            if update_job_status(job_id, "saved"):
+    with b2:
+        if st.button("Skip", key=f"skip_{job_id}"):
+            if update_job_status(job_id, "skipped"):
                 st.rerun()
             else:
                 st.warning("Could not update status")
 
-    with a3:
-        if st.button("Skipped", key=f"skipped_{job_id}"):
-            if update_job_status(job_id, "skipped"):
+    with b3:
+        if st.button("Save", key=f"save_{job_id}"):
+            if update_job_status(job_id, "saved"):
                 st.rerun()
             else:
                 st.warning("Could not update status")
@@ -348,9 +394,9 @@ if st.session_state.page == "home":
 elif st.session_state.page == "jobs":
     st.title("Data Analytics Jobs")
 
-    top1, top2 = st.columns([1, 1])
+    r1c1, r1c2 = st.columns([1.2, 5])
 
-    with top1:
+    with r1c1:
         if st.button("Refresh LinkedIn Jobs"):
             result = refresh_linkedin_jobs()
             if result:
@@ -362,38 +408,67 @@ elif st.session_state.page == "jobs":
             else:
                 st.warning("Could not refresh LinkedIn jobs")
 
-    with top2:
-        st.write("")
+    st.write("")
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    summary = fetch_summary(st.session_state.search_query)
+    status_counts = summary.get("status_counts", {})
+    day_counts = summary.get("day_counts", {})
 
-    with c1:
-        if st.button("24 Hours"):
+    # Top status boxes with counts
+    s1, s2, s3, s4 = st.columns([1, 1, 1, 1])
+
+    with s1:
+        if st.button(f"Jobs ({status_counts.get('jobs', 0)})"):
+            st.session_state.job_view = "jobs"
+            st.rerun()
+
+    with s2:
+        if st.button(f"Saved ({status_counts.get('saved', 0)})"):
+            st.session_state.job_view = "saved"
+            st.rerun()
+
+    with s3:
+        if st.button(f"Applied ({status_counts.get('applied', 0)})"):
+            st.session_state.job_view = "applied"
+            st.rerun()
+
+    with s4:
+        if st.button(f"Skipped ({status_counts.get('skipped', 0)})"):
+            st.session_state.job_view = "skipped"
+            st.rerun()
+
+    st.caption(f"Current view: {current_view_label()}")
+
+    # Compact day filters with counts
+    d1, d2, d3, d4, d5, d6, d7 = st.columns([1, 1, 1, 1, 1, 1, 5])
+
+    with d1:
+        if st.button(f"24 Hours ({day_counts.get('1', 0)})"):
             st.session_state.filter_days = 1
             st.rerun()
 
-    with c2:
-        if st.button("3 Days"):
+    with d2:
+        if st.button(f"3 Days ({day_counts.get('3', 0)})"):
             st.session_state.filter_days = 3
             st.rerun()
 
-    with c3:
-        if st.button("5 Days"):
+    with d3:
+        if st.button(f"5 Days ({day_counts.get('5', 0)})"):
             st.session_state.filter_days = 5
             st.rerun()
 
-    with c4:
-        if st.button("7 Days"):
+    with d4:
+        if st.button(f"7 Days ({day_counts.get('7', 0)})"):
             st.session_state.filter_days = 7
             st.rerun()
 
-    with c5:
-        if st.button("10 Days"):
+    with d5:
+        if st.button(f"10 Days ({day_counts.get('10', 0)})"):
             st.session_state.filter_days = 10
             st.rerun()
 
-    with c6:
-        if st.button("30 Days"):
+    with d6:
+        if st.button(f"30 Days ({day_counts.get('30', 0)})"):
             st.session_state.filter_days = 30
             st.rerun()
 
@@ -407,10 +482,12 @@ elif st.session_state.page == "jobs":
 
     if search_value != st.session_state.search_query:
         st.session_state.search_query = search_value
+        st.rerun()
 
     jobs = fetch_jobs(
         days=st.session_state.filter_days,
-        search=st.session_state.search_query
+        search=st.session_state.search_query,
+        status=current_status_filter()
     )
 
     bucket_labels = {
@@ -422,12 +499,20 @@ elif st.session_state.page == "jobs":
         30: "10 to 30 days ago",
     }
 
-    label = bucket_labels.get(st.session_state.filter_days, f"last {st.session_state.filter_days} days")
-
-    st.caption(
-        f"Showing jobs posted {label}"
-        + (f" matching '{st.session_state.search_query}'" if st.session_state.search_query.strip() else "")
+    label = bucket_labels.get(
+        st.session_state.filter_days,
+        f"last {st.session_state.filter_days} days"
     )
+
+    if st.session_state.job_view == "jobs":
+        caption_text = f"Showing active jobs posted {label}"
+    else:
+        caption_text = f"Showing {current_view_label().lower()} jobs posted {label}"
+
+    if st.session_state.search_query.strip():
+        caption_text += f" matching '{st.session_state.search_query}'"
+
+    st.caption(caption_text)
 
     if not jobs:
         st.info("No jobs found for this filter/search.")
