@@ -186,22 +186,6 @@ def startup_event():
     ensure_jobs_schema()
 
     scheduler.add_job(
-        refresh_usajobs,
-        "interval",
-        hours=6,
-        id="refresh_usajobs",
-        replace_existing=True
-    )
-
-    scheduler.add_job(
-        refresh_adzuna,
-        "interval",
-        hours=2,
-        id="refresh_adzuna",
-        replace_existing=True
-    )
-
-    scheduler.add_job(
         refresh_linkedin_source,
         "interval",
         hours=4,
@@ -220,7 +204,15 @@ def startup_event():
     if not scheduler.running:
         scheduler.start()
 
-    print("✅ Scheduler started")
+    print("✅ Scheduler started", flush=True)
+
+    # one-time boot refresh for testing
+    try:
+        print("🚀 Running one-time boot refresh: JSearch", flush=True)
+        refresh_jsearch()
+        print("✅ One-time boot refresh finished", flush=True)
+    except Exception as e:
+        print(f"❌ One-time boot refresh failed: {e}", flush=True)
 
 
 @app.on_event("shutdown")
