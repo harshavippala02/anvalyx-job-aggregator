@@ -234,7 +234,7 @@ def ensure_jobs_schema():
 # -----------------------------
 # Job helpers
 # -----------------------------
-def save_jobs(jobs):
+ddef save_jobs(jobs):
     db = SessionLocal()
     inserted = 0
     updated = 0
@@ -248,6 +248,8 @@ def save_jobs(jobs):
             return {"inserted": 0, "updated": 0, "skipped": 0}
 
         normalized_jobs = []
+        seen_keys = set()
+
         for raw_job in jobs:
             job = normalize_job(raw_job)
 
@@ -255,6 +257,14 @@ def save_jobs(jobs):
                 skipped += 1
                 continue
 
+            key = (job["external_id"], job["source"])
+
+            # remove duplicates inside the same incoming batch
+            if key in seen_keys:
+                skipped += 1
+                continue
+
+            seen_keys.add(key)
             normalized_jobs.append(job)
 
         if not normalized_jobs:
@@ -310,7 +320,9 @@ def save_jobs(jobs):
                 else:
                     skipped += 1
             else:
-                db.add(Job(**job))
+                new_job = Job(**job)
+                db.add(new_job)
+                existing_map[key] = new_job
                 inserted += 1
 
         db.commit()
