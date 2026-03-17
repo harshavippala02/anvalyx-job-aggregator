@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from datetime import datetime, timedelta
+from linkedin_client import pull_linkedin_jobs
 
 # --------------------------------------------------
 # ENV
@@ -112,6 +113,16 @@ def startup_event():
         scheduler.start()
 
     print("✅ Scheduler started")
+
+@app.get("/pull-linkedin")
+def pull_linkedin():
+
+    jobs = pull_linkedin_jobs()
+
+    return {
+        "count": len(jobs),
+        "jobs": jobs[:20]
+    }
 
 
 @app.on_event("shutdown")
