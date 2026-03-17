@@ -36,7 +36,7 @@ SessionLocal = sessionmaker(
 
 Base = declarative_base()
 
-ACTIVE_SOURCES = ["usajobs", "adzuna"]
+ACTIVE_SOURCES = ["usajobs", "adzuna", "linkedin"]
 
 
 # -----------------------------
@@ -52,6 +52,8 @@ def normalize_source_value(source):
         "usajobs": "usajobs",
         "usa jobs": "usajobs",
         "adzuna": "adzuna",
+        "linkedin": "linkedin",
+        "linkedin_public": "linkedin",
     }
 
     return mapping.get(s, s)
@@ -117,6 +119,8 @@ class Job(Base):
     source = Column(String, index=True, nullable=False)
     description = Column(Text, nullable=True)
     posted_at = Column(DateTime, default=datetime.utcnow)
+    status = Column(String, default="new", nullable=False)
+    applied_at = Column(DateTime, nullable=True)
 
 
 # -----------------------------
@@ -156,7 +160,9 @@ def ensure_jobs_schema():
                 url VARCHAR NULL,
                 source VARCHAR NOT NULL,
                 description TEXT NULL,
-                posted_at TIMESTAMP NULL
+                posted_at TIMESTAMP NULL,
+                status VARCHAR NOT NULL DEFAULT 'new',
+                applied_at TIMESTAMP NULL
             )
         """))
 
@@ -168,6 +174,16 @@ def ensure_jobs_schema():
         db.execute(text("""
             ALTER TABLE jobs
             ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP
+        """))
+
+        db.execute(text("""
+            ALTER TABLE jobs
+            ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'new'
+        """))
+
+        db.execute(text("""
+            ALTER TABLE jobs
+            ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP
         """))
 
         db.execute(text("""
@@ -187,6 +203,9 @@ def ensure_jobs_schema():
         """))
         db.execute(text("""
             CREATE INDEX IF NOT EXISTS ix_jobs_posted_at ON jobs (posted_at)
+        """))
+        db.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_jobs_status ON jobs (status)
         """))
 
         db.execute(text("""
@@ -305,6 +324,27 @@ def save_jobs(jobs):
         db.close()
 
 
+def update_job_status(job_id: int, status: str):
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            return None
+
+        job.status = status
+        if status == "applied":
+            job.applied_at = datetime.utcnow()
+
+        db.commit()
+        db.refresh(job)
+        return job
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def get_all_jobs():
     db = SessionLocal()
     try:
@@ -333,17 +373,28 @@ def get_job_counts():
         total = db.query(Job).count()
         usajobs = db.query(Job).filter(Job.source == "usajobs").count()
         adzuna = db.query(Job).filter(Job.source == "adzuna").count()
+        linkedin = db.query(Job).filter(Job.source == "linkedin").count()
         greenhouse = db.query(Job).filter(Job.source == "greenhouse").count()
         lever = db.query(Job).filter(Job.source == "lever").count()
         apify = db.query(Job).filter(Job.source == "apify").count()
+
+        applied = db.query(Job).filter(Job.status == "applied").count()
+        saved = db.query(Job).filter(Job.status == "saved").count()
+        skipped = db.query(Job).filter(Job.status == "skipped").count()
+        new_count = db.query(Job).filter(Job.status == "new").count()
 
         return {
             "all_jobs": total,
             "usajobs": usajobs,
             "adzuna": adzuna,
+            "linkedin": linkedin,
             "greenhouse": greenhouse,
             "lever": lever,
-            "apify": apify
+            "apify": apify,
+            "new": new_count,
+            "saved": saved,
+            "applied": applied,
+            "skipped": skipped,
         }
     finally:
         db.close()

@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import os
-from fastapi import FastAPI, Query
+import hashlib
+from fastapi import FastAPI, Query, HTTPException
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -29,6 +30,7 @@ from database import (
     ACTIVE_SOURCES,
     ensure_jobs_schema,
     normalize_source_value,
+    update_job_status,
 )
 
 from adzuna_client import fetch_adzuna_jobs
@@ -46,6 +48,67 @@ app.include_router(ats_router)
 # Scheduler
 # --------------------------------------------------
 scheduler = BackgroundScheduler()
+
+
+# --------------------------------------------------
+# LinkedIn helpers
+# --------------------------------------------------
+def parse_linkedin_posted_text(posted_text: str):
+    if not posted_text:
+        return None
+
+    text_value = str(posted_text).strip().lower()
+    now = datetime.utcnow()
+
+    if "just now" in text_value or "today" in text_value:
+        return now
+
+    if "hour" in text_value:
+        return now
+
+    if "day" in text_value:
+        try:
+            num = int(text_value.split()[0])
+            return now - timedelta(days=num)
+        except Exception:
+            return now
+
+    if "week" in text_value:
+        try:
+            num = int(text_value.split()[0])
+            return now - timedelta(days=(num * 7))
+        except Exception:
+            return None
+
+    return None
+
+
+def make_linkedin_external_id(url: str):
+    return "linkedin_" + hashlib.md5(url.encode("utf-8")).hexdigest()
+
+
+def normalize_linkedin_jobs(raw_jobs):
+    normalized = []
+
+    for job in raw_jobs:
+        url = (job.get("url") or "").strip()
+        if not url:
+            continue
+
+        posted_at = parse_linkedin_posted_text(job.get("posted"))
+
+        normalized.append({
+            "external_id": make_linkedin_external_id(url),
+            "title": (job.get("title") or "").strip(),
+            "company": (job.get("company") or "").strip(),
+            "location": (job.get("location") or "").strip() or "Unknown",
+            "url": url,
+            "source": "linkedin",
+            "description": "",
+            "posted_at": posted_at,
+        })
+
+    return normalized
 
 
 # --------------------------------------------------
@@ -77,10 +140,25 @@ def refresh_adzuna():
         print(f"⚠️ Adzuna skipped: {e}")
 
 
+def refresh_linkedin_source():
+    print("🔄 LinkedIn refresh started")
+    try:
+        raw_jobs = pull_linkedin_jobs() or []
+        jobs = normalize_linkedin_jobs(raw_jobs)
+        result = save_jobs(jobs)
+        print(
+            f"✅ LinkedIn refreshed | fetched={len(raw_jobs)} "
+            f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}"
+        )
+    except Exception as e:
+        print(f"⚠️ LinkedIn skipped: {e}")
+
+
 def refresh_all_sources():
     print("🚀 Full refresh cycle started")
     refresh_usajobs()
     refresh_adzuna()
+    refresh_linkedin_source()
     print("✅ Full refresh cycle finished")
 
 
@@ -109,20 +187,18 @@ def startup_event():
         replace_existing=True
     )
 
+    scheduler.add_job(
+        refresh_linkedin_source,
+        "interval",
+        hours=4,
+        id="refresh_linkedin",
+        replace_existing=True
+    )
+
     if not scheduler.running:
         scheduler.start()
 
     print("✅ Scheduler started")
-
-@app.get("/pull-linkedin")
-def pull_linkedin():
-
-    jobs = pull_linkedin_jobs()
-
-    return {
-        "count": len(jobs),
-        "jobs": jobs[:20]
-    }
 
 
 @app.on_event("shutdown")
@@ -149,6 +225,33 @@ def health_head():
 
 
 # --------------------------------------------------
+# LinkedIn endpoints
+# --------------------------------------------------
+@app.get("/pull-linkedin")
+def pull_linkedin():
+    jobs = pull_linkedin_jobs()
+    return {
+        "count": len(jobs),
+        "jobs": jobs[:20]
+    }
+
+
+@app.post("/refresh-linkedin")
+def refresh_linkedin():
+    raw_jobs = pull_linkedin_jobs() or []
+    jobs = normalize_linkedin_jobs(raw_jobs)
+    result = save_jobs(jobs)
+
+    return {
+        "status": "ok",
+        "fetched": len(raw_jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
+
+
+# --------------------------------------------------
 # Helpers
 # --------------------------------------------------
 def serialize_job(j: Job):
@@ -161,6 +264,7 @@ def serialize_job(j: Job):
         "apply_url": j.url,
         "source": j.source,
         "description": j.description,
+        "status": j.status,
         "posted": j.posted_at.isoformat() if j.posted_at else None
     }
 
@@ -242,6 +346,7 @@ def get_jobs(
     db: Session = SessionLocal()
     try:
         query = db.query(Job).filter(Job.source.in_(ACTIVE_SOURCES))
+        query = query.filter(Job.status != "applied")
 
         if fresh_only:
             cutoff = datetime.utcnow() - timedelta(days=7)
@@ -301,6 +406,7 @@ def get_fresh_jobs(
             .filter(Job.posted_at.isnot(None))
             .filter(Job.posted_at >= cutoff)
             .filter(Job.source.in_(ACTIVE_SOURCES))
+            .filter(Job.status != "applied")
             .order_by(Job.posted_at.desc().nullslast(), Job.id.desc())
             .offset(offset)
             .limit(limit)
@@ -327,6 +433,7 @@ def get_older_jobs(
             .filter(Job.posted_at < end)
             .filter(Job.posted_at >= start)
             .filter(Job.source.in_(ACTIVE_SOURCES))
+            .filter(Job.status != "applied")
             .order_by(Job.posted_at.desc().nullslast(), Job.id.desc())
             .offset(offset)
             .limit(limit)
@@ -424,6 +531,23 @@ def debug_counts():
         return counts
     finally:
         db.close()
+
+
+@app.post("/jobs/{job_id}/status")
+def set_job_status(job_id: int, status: str = Query(...)):
+    allowed = {"new", "saved", "applied", "skipped"}
+    if status not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    job = update_job_status(job_id, status)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return {
+        "message": "Job status updated",
+        "job_id": job_id,
+        "status": status
+    }
 
 
 # --------------------------------------------------

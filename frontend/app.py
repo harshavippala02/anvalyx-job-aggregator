@@ -172,6 +172,28 @@ def fetch_jobs(days=1, search=""):
         return []
 
 
+def update_job_status(job_id, status_value):
+    try:
+        res = requests.post(
+            f"{BACKEND_BASE}/jobs/{job_id}/status",
+            params={"status": status_value},
+            timeout=20
+        )
+        return res.status_code == 200
+    except Exception:
+        return False
+
+
+def refresh_linkedin_jobs():
+    try:
+        res = requests.post(f"{BACKEND_BASE}/refresh-linkedin", timeout=120)
+        if res.status_code == 200:
+            return res.json()
+        return None
+    except Exception:
+        return None
+
+
 def format_posted_display(raw):
     if not raw:
         return "Unknown"
@@ -212,7 +234,7 @@ def render_job_card(job):
         st.subheader(job.get("title", "Untitled Role"))
         st.write(f"{job.get('company', 'Unknown Company')} • {job.get('location', 'Unknown Location')}")
         st.caption(
-            f"{job.get('source', 'Unknown Source')} | Posted {format_posted_display(job.get('posted'))}"
+            f"{job.get('source', 'Unknown Source')} | Posted {format_posted_display(job.get('posted'))} | Status: {job.get('status', 'new')}"
         )
 
     with col2:
@@ -221,6 +243,29 @@ def render_job_card(job):
             st.link_button("Apply", apply_url)
 
     job_id = job.get("id", job.get("title", "job"))
+
+    a1, a2, a3 = st.columns(3)
+
+    with a1:
+        if st.button("Applied", key=f"applied_{job_id}"):
+            if update_job_status(job_id, "applied"):
+                st.rerun()
+            else:
+                st.warning("Could not update status")
+
+    with a2:
+        if st.button("Saved", key=f"saved_{job_id}"):
+            if update_job_status(job_id, "saved"):
+                st.rerun()
+            else:
+                st.warning("Could not update status")
+
+    with a3:
+        if st.button("Skipped", key=f"skipped_{job_id}"):
+            if update_job_status(job_id, "skipped"):
+                st.rerun()
+            else:
+                st.warning("Could not update status")
 
     if st.button("Check ATS Score", key=f"ats_{job_id}"):
         try:
@@ -302,6 +347,23 @@ if st.session_state.page == "home":
 
 elif st.session_state.page == "jobs":
     st.title("Data Analytics Jobs")
+
+    top1, top2 = st.columns([1, 1])
+
+    with top1:
+        if st.button("Refresh LinkedIn Jobs"):
+            result = refresh_linkedin_jobs()
+            if result:
+                st.success(
+                    f"LinkedIn refreshed: fetched={result.get('fetched', 0)}, "
+                    f"inserted={result.get('inserted', 0)}, updated={result.get('updated', 0)}"
+                )
+                st.rerun()
+            else:
+                st.warning("Could not refresh LinkedIn jobs")
+
+    with top2:
+        st.write("")
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
 
