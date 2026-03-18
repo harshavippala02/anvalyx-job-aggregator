@@ -189,8 +189,7 @@ footer { display: none !important; }
     border: 1px solid #e5e7eb;
     border-radius: 16px;
     padding: 16px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
-    min-height: 240px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.04);
 }
 
 .source-title {
