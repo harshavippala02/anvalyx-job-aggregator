@@ -1,5 +1,7 @@
 import hashlib
-import random
+import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
 
@@ -1256,12 +1258,6 @@ GREENHOUSE_BOARDS = [
     'zurich'
 ]
 
-MAX_BOARDS_PER_RUN = 80
-boards_to_check = random.sample(
-    GREENHOUSE_BOARDS,
-    min(MAX_BOARDS_PER_RUN, len(GREENHOUSE_BOARDS))
-)
-
 ALLOWED_TITLE_KEYWORDS = [
     "data analyst",
     "business analyst",
@@ -1307,8 +1303,15 @@ SENIOR_BLOCKERS = [
     "manager",
     "head of",
     "vice president",
-    "vp ",
+    "vp",
 ]
+
+# Word-boundary regex — prevents "management" matching "manager",
+# "staffing" matching "staff", "directory" matching "director", etc.
+_SENIOR_BLOCKER_RE = re.compile(
+    r'\b(staff|principal|director|manager|head of|vice president|vp)\b',
+    re.IGNORECASE,
+)
 
 ALLOWED_LOCATION_KEYWORDS = [
     "united states",
@@ -1392,7 +1395,7 @@ def is_allowed_title(title: str) -> bool:
     if any(bad in t for bad in BLOCKED_TITLE_KEYWORDS):
         return False
 
-    if any(bad in t for bad in SENIOR_BLOCKERS):
+    if _SENIOR_BLOCKER_RE.search(t):
         return False
 
     if "analytics engineer" in t:
@@ -1402,8 +1405,10 @@ def is_allowed_title(title: str) -> bool:
 
 
 def is_allowed_location(location: str) -> bool:
-    if not location:
-        return False
+    # Unknown/blank location: let it pass — many remote-first roles have no location
+    # set in the ATS. work_mode detection in database.py handles these via description.
+    if not location or location.strip().lower() in ("unknown", ""):
+        return True
 
     loc = location.strip().lower()
 
@@ -1468,45 +1473,63 @@ def normalize_greenhouse_job(job: dict[str, Any], board: str) -> dict[str, Any] 
     }
 
 
+
+GREENHOUSE_WORKERS = 25
+
+
+def _fetch_one_greenhouse(board: str) -> list[dict[str, Any]]:
+    # ?content=true is required — without it the Greenhouse API returns no description
+    url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
+    try:
+        response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+
+        if response.status_code == 404:
+            print(f"⚠️ Greenhouse board not found: {board}", flush=True)
+            return []
+
+        response.raise_for_status()
+
+        payload = response.json()
+        raw_jobs = payload.get("jobs", [])
+
+        print(f"Greenhouse fetched {len(raw_jobs)} raw jobs for {board}", flush=True)
+
+        out = []
+        for raw_job in raw_jobs:
+            normalized = normalize_greenhouse_job(raw_job, board)
+            if normalized:
+                out.append(normalized)
+        return out
+
+    except requests.HTTPError as e:
+        print(f"⚠️ Greenhouse HTTP error for {board}: {e}", flush=True)
+        return []
+    except requests.RequestException as e:
+        print(f"⚠️ Greenhouse request failed for {board}: {e}", flush=True)
+        return []
+    except Exception as e:
+        print(f"⚠️ Greenhouse failed for {board}: {e}", flush=True)
+        return []
+
+
 def fetch_greenhouse_jobs() -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
+    all_results: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, str]] = set()
+    lock = threading.Lock()
 
-    for board in boards_to_check:
-        url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
+    with ThreadPoolExecutor(max_workers=GREENHOUSE_WORKERS) as executor:
+        futures = {
+            executor.submit(_fetch_one_greenhouse, board): board
+            for board in GREENHOUSE_BOARDS
+        }
+        for future in as_completed(futures):
+            jobs = future.result()
+            with lock:
+                for job in jobs:
+                    key = (job["external_id"], job["source"])
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        all_results.append(job)
 
-        try:
-            response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
-
-            if response.status_code == 404:
-                print(f"⚠️ Greenhouse board not found: {board}", flush=True)
-                continue
-
-            response.raise_for_status()
-
-            payload = response.json()
-            jobs = payload.get("jobs", [])
-
-            print(f"Greenhouse fetched {len(jobs)} raw jobs for {board}", flush=True)
-
-            for raw_job in jobs:
-                normalized = normalize_greenhouse_job(raw_job, board)
-                if not normalized:
-                    continue
-
-                key = (normalized["external_id"], normalized["source"])
-                if key in seen_keys:
-                    continue
-
-                seen_keys.add(key)
-                results.append(normalized)
-
-        except requests.HTTPError as e:
-            print(f"⚠️ Greenhouse HTTP error for {board}: {e}", flush=True)
-        except requests.RequestException as e:
-            print(f"⚠️ Greenhouse request failed for {board}: {e}", flush=True)
-        except Exception as e:
-            print(f"⚠️ Greenhouse failed for {board}: {e}", flush=True)
-
-    print(f"✅ Greenhouse normalized jobs count = {len(results)}", flush=True)
-    return results
+    print(f"✅ Greenhouse normalized jobs count = {len(all_results)}", flush=True)
+    return all_results

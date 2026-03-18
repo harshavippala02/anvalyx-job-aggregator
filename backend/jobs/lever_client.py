@@ -1,5 +1,7 @@
 import hashlib
-import random
+import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
 
@@ -745,12 +747,6 @@ LEVER_COMPANIES = [
     'zuora'
 ]
 
-MAX_COMPANIES_PER_RUN = 80
-companies_to_check = random.sample(
-    LEVER_COMPANIES,
-    min(MAX_COMPANIES_PER_RUN, len(LEVER_COMPANIES))
-)
-
 ALLOWED_TITLE_KEYWORDS = [
     "data analyst",
     "business analyst",
@@ -796,8 +792,15 @@ SENIOR_BLOCKERS = [
     "manager",
     "head of",
     "vice president",
-    "vp ",
+    "vp",
 ]
+
+# Word-boundary regex — prevents "management" matching "manager",
+# "staffing" matching "staff", "directory" matching "director", etc.
+_SENIOR_BLOCKER_RE = re.compile(
+    r'\b(staff|principal|director|manager|head of|vice president|vp)\b',
+    re.IGNORECASE,
+)
 
 ALLOWED_LOCATION_KEYWORDS = [
     "united states",
@@ -890,7 +893,7 @@ def is_allowed_title(title: str) -> bool:
     if any(bad in t for bad in BLOCKED_TITLE_KEYWORDS):
         return False
 
-    if any(bad in t for bad in SENIOR_BLOCKERS):
+    if _SENIOR_BLOCKER_RE.search(t):
         return False
 
     if "analytics engineer" in t:
@@ -900,8 +903,10 @@ def is_allowed_title(title: str) -> bool:
 
 
 def is_allowed_location(location: str) -> bool:
-    if not location:
-        return False
+    # Unknown/blank location: let it pass — many remote-first roles have no location
+    # set in the ATS. work_mode detection in database.py handles these via description.
+    if not location or location.strip().lower() in ("unknown", ""):
+        return True
 
     loc = location.strip().lower()
 
@@ -962,46 +967,63 @@ def normalize_lever_job(job: dict[str, Any], company_slug: str) -> dict[str, Any
     }
 
 
+
+LEVER_WORKERS = 20
+
+
+def _fetch_one_lever(company_slug: str) -> list[dict[str, Any]]:
+    url = f"https://api.lever.co/v0/postings/{company_slug}?mode=json"
+    try:
+        response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+
+        if response.status_code == 404:
+            print(f"ℹ️ Lever board not found for {company_slug} (404)", flush=True)
+            return []
+
+        response.raise_for_status()
+
+        jobs = response.json()
+        if not isinstance(jobs, list):
+            return []
+
+        print(f"Lever fetched {len(jobs)} raw jobs for {company_slug}", flush=True)
+
+        out = []
+        for raw_job in jobs:
+            normalized = normalize_lever_job(raw_job, company_slug)
+            if normalized:
+                out.append(normalized)
+        return out
+
+    except requests.exceptions.HTTPError as e:
+        print(f"⚠️ Lever HTTP error for {company_slug}: {e}", flush=True)
+        return []
+    except requests.exceptions.RequestException as e:
+        print(f"⚠️ Lever request failed for {company_slug}: {e}", flush=True)
+        return []
+    except Exception as e:
+        print(f"⚠️ Lever failed for {company_slug}: {e}", flush=True)
+        return []
+
+
 def fetch_lever_jobs() -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
+    all_results: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, str]] = set()
+    lock = threading.Lock()
 
-    for company_slug in companies_to_check:
-        url = f"https://api.lever.co/v0/postings/{company_slug}?mode=json"
+    with ThreadPoolExecutor(max_workers=LEVER_WORKERS) as executor:
+        futures = {
+            executor.submit(_fetch_one_lever, slug): slug
+            for slug in LEVER_COMPANIES
+        }
+        for future in as_completed(futures):
+            jobs = future.result()
+            with lock:
+                for job in jobs:
+                    key = (job["external_id"], job["source"])
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        all_results.append(job)
 
-        try:
-            response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
-
-            if response.status_code == 404:
-                print(f"ℹ️ Lever board not found for {company_slug} (404)", flush=True)
-                continue
-
-            response.raise_for_status()
-
-            jobs = response.json()
-            if not isinstance(jobs, list):
-                jobs = []
-
-            print(f"Lever fetched {len(jobs)} raw jobs for {company_slug}", flush=True)
-
-            for raw_job in jobs:
-                normalized = normalize_lever_job(raw_job, company_slug)
-                if not normalized:
-                    continue
-
-                key = (normalized["external_id"], normalized["source"])
-                if key in seen_keys:
-                    continue
-
-                seen_keys.add(key)
-                results.append(normalized)
-
-        except requests.exceptions.HTTPError as e:
-            print(f"⚠️ Lever HTTP error for {company_slug}: {e}", flush=True)
-        except requests.exceptions.RequestException as e:
-            print(f"⚠️ Lever request failed for {company_slug}: {e}", flush=True)
-        except Exception as e:
-            print(f"⚠️ Lever failed for {company_slug}: {e}", flush=True)
-
-    print(f"✅ Lever normalized jobs count = {len(results)}", flush=True)
-    return results
+    print(f"✅ Lever normalized jobs count = {len(all_results)}", flush=True)
+    return all_results
