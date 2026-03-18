@@ -65,6 +65,50 @@ SENIOR_BLOCKERS = [
     "vp ",
 ]
 
+ALLOWED_LOCATION_KEYWORDS = [
+    "united states",
+    "usa",
+    "us",
+    "remote",
+    "new york",
+    "california",
+    "texas",
+    "florida",
+    "illinois",
+    "washington",
+    "massachusetts",
+    "virginia",
+    "georgia",
+    "north carolina",
+    "michigan",
+    "new jersey",
+    "pennsylvania",
+    "ohio",
+    "arizona",
+    "colorado",
+]
+
+BLOCKED_LOCATION_KEYWORDS = [
+    "india",
+    "mexico",
+    "canada",
+    "brazil",
+    "argentina",
+    "germany",
+    "france",
+    "spain",
+    "italy",
+    "poland",
+    "netherlands",
+    "singapore",
+    "philippines",
+    "australia",
+    "japan",
+    "ireland",
+    "united kingdom",
+    "uk",
+]
+
 REQUEST_TIMEOUT_SECONDS = 20
 
 
@@ -112,6 +156,21 @@ def is_allowed_title(title: str) -> bool:
     return any(good in t for good in ALLOWED_TITLE_KEYWORDS)
 
 
+def is_allowed_location(location: str) -> bool:
+    if not location:
+        return False
+
+    loc = location.strip().lower()
+
+    if any(bad in loc for bad in BLOCKED_LOCATION_KEYWORDS):
+        return False
+
+    if any(good in loc for good in ALLOWED_LOCATION_KEYWORDS):
+        return True
+
+    return False
+
+
 def build_location(job: dict[str, Any]) -> str:
     location = (job.get("location", {}) or {}).get("name", "")
     location = str(location).strip()
@@ -132,6 +191,8 @@ def normalize_greenhouse_job(job: dict[str, Any], board: str) -> dict[str, Any] 
         return None
 
     location = build_location(job)
+    if not is_allowed_location(location):
+        return None
 
     metadata = job.get("metadata") or []
     metadata_text = " | ".join(

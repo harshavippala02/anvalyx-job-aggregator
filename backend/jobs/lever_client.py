@@ -64,6 +64,50 @@ SENIOR_BLOCKERS = [
     "vp ",
 ]
 
+ALLOWED_LOCATION_KEYWORDS = [
+    "united states",
+    "usa",
+    "us",
+    "remote",
+    "new york",
+    "california",
+    "texas",
+    "florida",
+    "illinois",
+    "washington",
+    "massachusetts",
+    "virginia",
+    "georgia",
+    "north carolina",
+    "michigan",
+    "new jersey",
+    "pennsylvania",
+    "ohio",
+    "arizona",
+    "colorado",
+]
+
+BLOCKED_LOCATION_KEYWORDS = [
+    "india",
+    "mexico",
+    "canada",
+    "brazil",
+    "argentina",
+    "germany",
+    "france",
+    "spain",
+    "italy",
+    "poland",
+    "netherlands",
+    "singapore",
+    "philippines",
+    "australia",
+    "japan",
+    "ireland",
+    "united kingdom",
+    "uk",
+]
+
 REQUEST_TIMEOUT_SECONDS = 20
 
 
@@ -81,7 +125,6 @@ def parse_posted_at(value: Any):
         return None
 
     try:
-        # Lever often returns milliseconds timestamp
         if isinstance(value, (int, float)):
             if value > 10_000_000_000:
                 return datetime.utcfromtimestamp(value / 1000)
@@ -121,6 +164,21 @@ def is_allowed_title(title: str) -> bool:
     return any(good in t for good in ALLOWED_TITLE_KEYWORDS)
 
 
+def is_allowed_location(location: str) -> bool:
+    if not location:
+        return False
+
+    loc = location.strip().lower()
+
+    if any(bad in loc for bad in BLOCKED_LOCATION_KEYWORDS):
+        return False
+
+    if any(good in loc for good in ALLOWED_LOCATION_KEYWORDS):
+        return True
+
+    return False
+
+
 def build_location(job: dict[str, Any]) -> str:
     categories = job.get("categories") or {}
     location = (categories.get("location") or "").strip()
@@ -147,6 +205,9 @@ def normalize_lever_job(job: dict[str, Any], company_slug: str) -> dict[str, Any
     )
 
     location = build_location(job)
+    if not is_allowed_location(location):
+        return None
+
     posted_at = (
         parse_posted_at(job.get("createdAt"))
         or parse_posted_at(job.get("updatedAt"))
