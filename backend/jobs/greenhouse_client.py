@@ -1,4 +1,5 @@
 import hashlib
+import random
 from datetime import datetime
 from typing import Any
 
@@ -1255,6 +1256,12 @@ GREENHOUSE_BOARDS = [
     'zurich'
 ]
 
+MAX_BOARDS_PER_RUN = 80
+boards_to_check = random.sample(
+    GREENHOUSE_BOARDS,
+    min(MAX_BOARDS_PER_RUN, len(GREENHOUSE_BOARDS))
+)
+
 ALLOWED_TITLE_KEYWORDS = [
     "data analyst",
     "business analyst",
@@ -1465,7 +1472,7 @@ def fetch_greenhouse_jobs() -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, str]] = set()
 
-    for board in GREENHOUSE_BOARDS:
+    for board in boards_to_check:
         url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
 
         try:
