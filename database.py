@@ -37,7 +37,17 @@ SessionLocal = sessionmaker(
 
 Base = declarative_base()
 
-ACTIVE_SOURCES = ["usajobs", "adzuna", "linkedin","jsearch","greenhouse", "lever"]
+ACTIVE_SOURCES = [
+    "usajobs",
+    "adzuna",
+    "linkedin",
+    "jsearch",
+    "greenhouse",
+    "lever",
+    "remotive",
+    "arbeitnow",
+    "jobicy",
+]
 
 
 # -----------------------------
@@ -56,6 +66,12 @@ def normalize_source_value(source):
         "linkedin": "linkedin",
         "linkedin_public": "linkedin",
         "jsearch": "jsearch",
+        "greenhouse": "greenhouse",
+        "lever": "lever",
+        "remotive": "remotive",
+        "arbeitnow": "arbeitnow",
+        "arbeit now": "arbeitnow",
+        "jobicy": "jobicy",
     }
 
     return mapping.get(s, s)
@@ -615,6 +631,9 @@ def get_job_counts():
         lever = db.query(Job).filter(Job.source == "lever").count()
         apify = db.query(Job).filter(Job.source == "apify").count()
         jsearch = db.query(Job).filter(Job.source == "jsearch").count()
+        remotive = db.query(Job).filter(Job.source == "remotive").count()
+        arbeitnow = db.query(Job).filter(Job.source == "arbeitnow").count()
+        jobicy = db.query(Job).filter(Job.source == "jobicy").count()
 
         applied = db.query(Job).filter(Job.status == "applied").count()
         saved = db.query(Job).filter(Job.status == "saved").count()
@@ -629,6 +648,9 @@ def get_job_counts():
             "jsearch": jsearch,
             "greenhouse": greenhouse,
             "lever": lever,
+            "remotive": remotive,
+            "arbeitnow": arbeitnow,
+            "jobicy": jobicy,
             "apify": apify,
             "new": new_count,
             "saved": saved,

@@ -14,6 +14,9 @@ from usajobs_client import fetch_usajobs
 
 from backend.jobs.greenhouse_client import fetch_greenhouse_jobs
 from backend.jobs.lever_client import fetch_lever_jobs
+from backend.jobs.remotive_client import fetch_remotive_jobs
+from backend.jobs.arbeitnow_client import fetch_arbeitnow_jobs
+from backend.jobs.jobicy_client import fetch_jobicy_jobs
 
 # --------------------------------------------------
 # ENV
@@ -245,6 +248,72 @@ def refresh_lever():
     }
 
 
+def refresh_remotive():
+    print("🔄 Remotive refresh started", flush=True)
+
+    jobs = fetch_remotive_jobs() or []
+    result = save_jobs(jobs)
+
+    print(
+        f"✅ Remotive refreshed | fetched={len(jobs)} "
+        f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}",
+        flush=True
+    )
+
+    return {
+        "status": "ok",
+        "source": "remotive",
+        "fetched": len(jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
+
+
+def refresh_arbeitnow():
+    print("🔄 Arbeitnow refresh started", flush=True)
+
+    jobs = fetch_arbeitnow_jobs() or []
+    result = save_jobs(jobs)
+
+    print(
+        f"✅ Arbeitnow refreshed | fetched={len(jobs)} "
+        f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}",
+        flush=True
+    )
+
+    return {
+        "status": "ok",
+        "source": "arbeitnow",
+        "fetched": len(jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
+
+
+def refresh_jobicy():
+    print("🔄 Jobicy refresh started", flush=True)
+
+    jobs = fetch_jobicy_jobs() or []
+    result = save_jobs(jobs)
+
+    print(
+        f"✅ Jobicy refreshed | fetched={len(jobs)} "
+        f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}",
+        flush=True
+    )
+
+    return {
+        "status": "ok",
+        "source": "jobicy",
+        "fetched": len(jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
+
+
 def refresh_all_sources():
     print("🚀 Full refresh cycle started", flush=True)
 
@@ -255,6 +324,9 @@ def refresh_all_sources():
         "jsearch": refresh_jsearch(),
         "greenhouse": refresh_greenhouse(),
         "lever": refresh_lever(),
+        "remotive": refresh_remotive(),
+        "arbeitnow": refresh_arbeitnow(),
+        "jobicy": refresh_jobicy(),
     }
 
     print("✅ Full refresh cycle finished", flush=True)
@@ -332,6 +404,21 @@ def refresh_greenhouse_endpoint():
 @app.post("/refresh-lever")
 def refresh_lever_endpoint():
     return refresh_lever()
+
+
+@app.post("/refresh-remotive")
+def refresh_remotive_endpoint():
+    return refresh_remotive()
+
+
+@app.post("/refresh-arbeitnow")
+def refresh_arbeitnow_endpoint():
+    return refresh_arbeitnow()
+
+
+@app.post("/refresh-jobicy")
+def refresh_jobicy_endpoint():
+    return refresh_jobicy()
 
 
 # --------------------------------------------------

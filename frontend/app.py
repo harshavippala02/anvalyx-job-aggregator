@@ -532,7 +532,8 @@ elif st.session_state.page == "jobs":
 
     st.subheader("Refresh Sources")
     row1 = st.columns(4)
-    row2 = st.columns(3)
+    row2 = st.columns(4)
+    row3 = st.columns(3)
 
     with row1[0]:
         if st.button("Wake Backend"):
@@ -661,6 +662,66 @@ elif st.session_state.page == "jobs":
             else:
                 st.error(
                     f"Lever refresh failed | status={result.get('status_code')} | "
+                    f"data={result.get('data')}"
+                )
+
+    with row2[3]:
+        if st.button("Refresh Remotive Jobs"):
+            with st.spinner("Refreshing Remotive jobs..."):
+                result = refresh_source_jobs("/refresh-remotive")
+
+            if result["ok"]:
+                data = result["data"]
+                st.success(
+                    f"Remotive refreshed: fetched={data.get('fetched', 0)}, "
+                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
+                    f"skipped={data.get('skipped', 0)}"
+                )
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(
+                    f"Remotive refresh failed | status={result.get('status_code')} | "
+                    f"data={result.get('data')}"
+                )
+
+    with row3[0]:
+        if st.button("Refresh Arbeitnow Jobs"):
+            with st.spinner("Refreshing Arbeitnow jobs..."):
+                result = refresh_source_jobs("/refresh-arbeitnow")
+
+            if result["ok"]:
+                data = result["data"]
+                st.success(
+                    f"Arbeitnow refreshed: fetched={data.get('fetched', 0)}, "
+                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
+                    f"skipped={data.get('skipped', 0)}"
+                )
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(
+                    f"Arbeitnow refresh failed | status={result.get('status_code')} | "
+                    f"data={result.get('data')}"
+                )
+
+    with row3[1]:
+        if st.button("Refresh Jobicy Jobs"):
+            with st.spinner("Refreshing Jobicy jobs..."):
+                result = refresh_source_jobs("/refresh-jobicy")
+
+            if result["ok"]:
+                data = result["data"]
+                st.success(
+                    f"Jobicy refreshed: fetched={data.get('fetched', 0)}, "
+                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
+                    f"skipped={data.get('skipped', 0)}"
+                )
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(
+                    f"Jobicy refresh failed | status={result.get('status_code')} | "
                     f"data={result.get('data')}"
                 )
 
