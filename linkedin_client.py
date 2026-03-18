@@ -4,7 +4,8 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlencode
 
-BASE_URL = "https://www.linkedin.com/jobs/search"
+
+BASE_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 DETAIL_URL_TEMPLATE = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
 
 HEADERS = {
@@ -46,10 +47,6 @@ ALLOWED_TITLES = [
     "insights analyst",
     "decision scientist",
     "data analytics analyst",
-    "commercial analyst",
-    "financial reporting analyst",
-    "data reporting analyst",
-    "sales operations analyst",
 ]
 
 BLOCKED_TITLES = [
@@ -89,9 +86,19 @@ def fetch_page(url: str) -> str:
 def extract_job_id_from_url(url: str) -> str | None:
     if not url:
         return None
-    match = re.search(r"/jobs/view/(?:[^/]+-)?(\d+)", url)
-    if match:
-        return match.group(1)
+
+    patterns = [
+        r"/jobs/view/(\d+)",
+        r"/jobs/view/[^/]+-(\d+)",
+        r"currentJobId=(\d+)",
+        r"/jobPosting/(\d+)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+
     return None
 
 
@@ -126,7 +133,7 @@ def fetch_job_description(job_id: str) -> str:
 
         return clean_description_text(description_el.get_text("\n", strip=True))
     except Exception as e:
-        print(f"LinkedIn detail fetch failed for {job_id}: {e}")
+        print(f"LinkedIn detail fetch failed for {job_id}: {e}", flush=True)
         return ""
 
 
@@ -134,32 +141,45 @@ def parse_jobs(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     jobs = []
 
-    cards = soup.select("div.base-card, li div.base-card, ul.jobs-search__results-list li")
+    cards = soup.select("li")
+
+    print(f"LinkedIn parser found {len(cards)} raw li elements", flush=True)
 
     for card in cards:
         try:
-            title_el = card.select_one("h3.base-search-card__title") or card.select_one("h3")
-            company_el = card.select_one("h4.base-search-card__subtitle") or card.select_one("h4")
-            location_el = card.select_one(".job-search-card__location") or card.select_one("span.job-search-card__location")
             link_el = (
                 card.select_one("a.base-card__full-link")
                 or card.select_one("a[href*='/jobs/view/']")
                 or card.select_one("a")
             )
+            title_el = (
+                card.select_one("h3.base-search-card__title")
+                or card.select_one("h3")
+            )
+            company_el = (
+                card.select_one("h4.base-search-card__subtitle")
+                or card.select_one("h4")
+            )
+            location_el = (
+                card.select_one(".job-search-card__location")
+                or card.select_one("span.job-search-card__location")
+                or card.select_one(".base-search-card__metadata span")
+            )
             time_el = card.select_one("time")
 
-            if not title_el or not company_el or not link_el:
+            if not link_el or not title_el or not company_el:
                 continue
 
+            url = (link_el.get("href") or "").strip()
+            if not url:
+                continue
+
+            url = url.split("?")[0].strip()
             title = title_el.get_text(" ", strip=True)
             company = company_el.get_text(" ", strip=True)
             location = location_el.get_text(" ", strip=True) if location_el else ""
-            url = link_el.get("href", "").split("?")[0].strip()
             posted = time_el.get_text(" ", strip=True) if time_el else ""
             job_id = extract_job_id_from_url(url)
-
-            if not url:
-                continue
 
             jobs.append({
                 "job_id": job_id,
@@ -170,9 +190,12 @@ def parse_jobs(html: str) -> list[dict]:
                 "posted": posted,
                 "description": "",
             })
-        except Exception:
+
+        except Exception as e:
+            print(f"LinkedIn parse error: {e}", flush=True)
             continue
 
+    print(f"LinkedIn parser extracted {len(jobs)} jobs before filtering", flush=True)
     return jobs
 
 
@@ -251,13 +274,19 @@ def pull_linkedin_jobs() -> list[dict]:
         for location in LOCATIONS:
             for start in START_OFFSETS:
                 url = build_url(keyword, location, start)
+                print(f"LinkedIn fetching: {url}", flush=True)
 
                 try:
                     html = fetch_page(url)
                     jobs = parse_jobs(html)
 
+                    print(
+                        f"LinkedIn raw parsed jobs for keyword={keyword} | location={location} | start={start}: {len(jobs)}",
+                        flush=True
+                    )
+
                     if not jobs:
-                        break
+                        continue
 
                     for job in jobs:
                         if not is_recent(job.get("posted", "")):
@@ -267,13 +296,17 @@ def pull_linkedin_jobs() -> list[dict]:
                         results.append(job)
 
                 except Exception as e:
-                    print(f"LinkedIn fetch failed for {keyword} | {location} | start={start}: {e}")
+                    print(
+                        f"LinkedIn fetch failed for {keyword} | {location} | start={start}: {e}",
+                        flush=True
+                    )
 
                 time.sleep(REQUEST_SLEEP_SECONDS)
 
     results = dedupe_jobs(results)
 
-    # only enrich a small batch first for stability
+    print(f"LinkedIn filtered jobs after dedupe: {len(results)}", flush=True)
+
     for job in results[:DETAIL_FETCH_LIMIT]:
         job_id = job.get("job_id")
         if job_id:

@@ -36,6 +36,9 @@ if "job_view" not in st.session_state:
 if "ats_cache" not in st.session_state:
     st.session_state.ats_cache = {}
 
+if "source_refresh_results" not in st.session_state:
+    st.session_state.source_refresh_results = {}
+
 # ---------------- CUSTOM CSS ----------------
 
 st.markdown("""
@@ -55,25 +58,26 @@ footer { display: none !important; }
 .block-container {
     padding-top: 1.2rem !important;
     padding-bottom: 2rem !important;
-    padding-left: 3rem !important;
-    padding-right: 3rem !important;
+    padding-left: 2.2rem !important;
+    padding-right: 2.2rem !important;
+    max-width: 1400px;
 }
 
 .stButton > button {
+    width: 100%;
     background: white;
     border: 1px solid #e5e7eb;
-    padding: 10px 16px;
-    border-radius: 10px;
-    font-weight: 500;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-weight: 600;
     color: #374151;
-    white-space: nowrap;
-    min-width: 90px;
     height: 46px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 .stButton > button:hover {
     background: #f3f4f6;
-    border-color: #d1d5db;
+    border-color: #cbd5e1;
     color: #111827;
 }
 
@@ -180,6 +184,139 @@ footer { display: none !important; }
     margin-top: 0.3rem;
 }
 
+.source-card {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+    min-height: 240px;
+}
+
+.source-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #111827;
+    margin-bottom: 6px;
+}
+
+.source-muted {
+    font-size: 13px;
+    color: #6b7280;
+    margin-bottom: 10px;
+}
+
+.source-metric {
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-top: 8px;
+}
+
+.source-metric-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.source-metric-value {
+    font-size: 18px;
+    font-weight: 800;
+    color: #111827;
+    margin-top: 2px;
+}
+
+.result-ok {
+    margin-top: 10px;
+    background: #ecfdf5;
+    border: 1px solid #a7f3d0;
+    color: #065f46;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 13px;
+}
+
+.result-bad {
+    margin-top: 10px;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #991b1b;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 13px;
+}
+
+.result-neutral {
+    margin-top: 10px;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1e40af;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 13px;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.summary-box {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    padding: 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+.summary-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.summary-value {
+    font-size: 28px;
+    font-weight: 800;
+    color: #111827;
+    margin-top: 6px;
+}
+
+.source-counts-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 10px;
+}
+
+.source-count-box {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 14px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+.source-count-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: #374151;
+}
+
+.source-count-value {
+    font-size: 24px;
+    font-weight: 800;
+    color: #111827;
+    margin-top: 4px;
+}
+
 hr {
     margin-top: 1rem !important;
     margin-bottom: 1.5rem !important;
@@ -189,18 +326,18 @@ hr {
 
 # ---------------- HELPERS ----------------
 
-def wait_for_backend_ready(max_wait_seconds=75):
+def wait_for_backend_ready(max_wait_seconds=180):
     start = time.time()
 
     while time.time() - start < max_wait_seconds:
         try:
-            res = requests.get(f"{BACKEND_BASE}/", timeout=10)
+            res = requests.get(f"{BACKEND_BASE}/", timeout=20)
             if res.status_code == 200:
                 return True
         except Exception:
             pass
 
-        time.sleep(3)
+        time.sleep(4)
 
     return False
 
@@ -208,7 +345,7 @@ def wait_for_backend_ready(max_wait_seconds=75):
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_jobs(days=1, search="", status=None):
     try:
-        ready = wait_for_backend_ready(max_wait_seconds=75)
+        ready = wait_for_backend_ready(max_wait_seconds=180)
         if not ready:
             return []
 
@@ -223,7 +360,7 @@ def fetch_jobs(days=1, search="", status=None):
         if status:
             params["status"] = status
 
-        res = requests.get(f"{BACKEND_BASE}/jobs", params=params, timeout=30)
+        res = requests.get(f"{BACKEND_BASE}/jobs", params=params, timeout=40)
 
         if res.status_code == 200:
             return res.json()
@@ -243,7 +380,7 @@ def fetch_jobs(days=1, search="", status=None):
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_summary(search=""):
     try:
-        ready = wait_for_backend_ready(max_wait_seconds=75)
+        ready = wait_for_backend_ready(max_wait_seconds=180)
         if not ready:
             return {
                 "status_counts": {"jobs": 0, "saved": 0, "applied": 0, "skipped": 0},
@@ -254,7 +391,7 @@ def fetch_summary(search=""):
         if search and search.strip():
             params["search"] = search.strip()
 
-        res = requests.get(f"{BACKEND_BASE}/jobs/summary", params=params, timeout=30)
+        res = requests.get(f"{BACKEND_BASE}/jobs/summary", params=params, timeout=40)
         if res.status_code == 200:
             return res.json()
 
@@ -267,6 +404,22 @@ def fetch_summary(search=""):
             "status_counts": {"jobs": 0, "saved": 0, "applied": 0, "skipped": 0},
             "day_counts": {"1": 0, "3": 0, "5": 0, "7": 0, "10": 0, "30": 0},
         }
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def fetch_debug_counts():
+    try:
+        ready = wait_for_backend_ready(max_wait_seconds=180)
+        if not ready:
+            return {}
+
+        res = requests.get(f"{BACKEND_BASE}/jobs/debug-counts", timeout=40)
+        if res.status_code == 200:
+            return res.json()
+
+        return {}
+    except Exception:
+        return {}
 
 
 def update_job_status(job_id, status_value):
@@ -283,7 +436,7 @@ def update_job_status(job_id, status_value):
 
 def refresh_source_jobs(endpoint_path):
     try:
-        ready = wait_for_backend_ready(max_wait_seconds=75)
+        ready = wait_for_backend_ready(max_wait_seconds=180)
         if not ready:
             return {
                 "ok": False,
@@ -292,7 +445,7 @@ def refresh_source_jobs(endpoint_path):
                 "data": {"error": "Backend did not wake up in time"},
             }
 
-        res = requests.post(f"{BACKEND_BASE}{endpoint_path}", timeout=180)
+        res = requests.post(f"{BACKEND_BASE}{endpoint_path}", timeout=240)
 
         try:
             data = res.json()
@@ -472,6 +625,79 @@ def render_job_card(job):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+
+def render_refresh_result(source_key):
+    result = st.session_state.source_refresh_results.get(source_key)
+
+    if not result:
+        st.markdown(
+            '<div class="result-neutral">No refresh run yet for this source.</div>',
+            unsafe_allow_html=True
+        )
+        return
+
+    data = result.get("data", {})
+
+    if result.get("ok"):
+        st.markdown(
+            f"""
+            <div class="result-ok">
+                <strong>Last refresh OK</strong><br>
+                fetched={data.get('fetched', 0)} |
+                inserted={data.get('inserted', 0)} |
+                updated={data.get('updated', 0)} |
+                skipped={data.get('skipped', 0)}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            f"""
+            <div class="result-bad">
+                <strong>Last refresh failed</strong><br>
+                status={result.get('status_code')} |
+                error={data.get('error') or data.get('detail') or data.get('raw_text') or data}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+def run_source_refresh(source_key, endpoint_path, spinner_text):
+    with st.spinner(spinner_text):
+        result = refresh_source_jobs(endpoint_path)
+
+    st.session_state.source_refresh_results[source_key] = result
+    st.cache_data.clear()
+    st.rerun()
+
+
+def render_source_card(title, source_key, endpoint_path, db_count, spinner_text):
+    st.markdown('<div class="source-card">', unsafe_allow_html=True)
+    st.markdown(f'<div class="source-title">{title}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="source-muted">Jobs currently stored from this API</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        f"""
+        <div class="source-metric">
+            <div class="source-metric-label">Current DB Count</div>
+            <div class="source-metric-value">{db_count}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    if st.button(f"Refresh {title}", key=f"refresh_{source_key}"):
+        run_source_refresh(source_key, endpoint_path, spinner_text)
+
+    render_refresh_result(source_key)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 # ---------------- NAVBAR ----------------
 
 nav1, nav2, nav3, nav4, nav5, nav6, nav7 = st.columns([2.6, 1, 1.1, 1, 1.4, 1, 1])
@@ -530,200 +756,207 @@ elif st.session_state.page == "jobs":
     st.title("Data Analytics Jobs")
     st.caption(f"Backend: {BACKEND_BASE}")
 
-    st.subheader("Refresh Sources")
-    row1 = st.columns(4)
-    row2 = st.columns(4)
-    row3 = st.columns(3)
+    debug_counts = fetch_debug_counts()
 
-    with row1[0]:
+    st.subheader("Source Dashboard")
+
+    top1, top2, top3, top4 = st.columns(4)
+
+    with top1:
+        st.markdown(
+            f"""
+            <div class="summary-box">
+                <div class="summary-label">Total Jobs in DB</div>
+                <div class="summary-value">{debug_counts.get('all_jobs', 0)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with top2:
+        st.markdown(
+            f"""
+            <div class="summary-box">
+                <div class="summary-label">Fresh Jobs</div>
+                <div class="summary-value">{debug_counts.get('fresh_jobs_active_sources', 0)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with top3:
+        st.markdown(
+            f"""
+            <div class="summary-box">
+                <div class="summary-label">With Description</div>
+                <div class="summary-value">{debug_counts.get('jobs_with_description', 0)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with top4:
+        st.markdown(
+            f"""
+            <div class="summary-box">
+                <div class="summary-label">Missing Description</div>
+                <div class="summary-value">{debug_counts.get('jobs_missing_description', 0)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    st.write("")
+    st.markdown("### Jobs from each API")
+
+    st.markdown(
+        f"""
+        <div class="source-counts-grid">
+            <div class="source-count-box">
+                <div class="source-count-name">JSearch</div>
+                <div class="source-count-value">{debug_counts.get('jsearch', 0)}</div>
+            </div>
+            <div class="source-count-box">
+                <div class="source-count-name">LinkedIn</div>
+                <div class="source-count-value">{debug_counts.get('linkedin', 0)}</div>
+            </div>
+            <div class="source-count-box">
+                <div class="source-count-name">USAJobs</div>
+                <div class="source-count-value">{debug_counts.get('usajobs', 0)}</div>
+            </div>
+            <div class="source-count-box">
+                <div class="source-count-name">Adzuna</div>
+                <div class="source-count-value">{debug_counts.get('adzuna', 0)}</div>
+            </div>
+            <div class="source-count-box">
+                <div class="source-count-name">Greenhouse</div>
+                <div class="source-count-value">{debug_counts.get('greenhouse', 0)}</div>
+            </div>
+            <div class="source-count-box">
+                <div class="source-count-name">Lever</div>
+                <div class="source-count-value">{debug_counts.get('lever', 0)}</div>
+            </div>
+            <div class="source-count-box">
+                <div class="source-count-name">Remotive</div>
+                <div class="source-count-value">{debug_counts.get('remotive', 0)}</div>
+            </div>
+            <div class="source-count-box">
+                <div class="source-count-name">Arbeitnow</div>
+                <div class="source-count-value">{debug_counts.get('arbeitnow', 0)}</div>
+            </div>
+            <div class="source-count-box">
+                <div class="source-count-name">Jobicy</div>
+                <div class="source-count-value">{debug_counts.get('jobicy', 0)}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.write("")
+    st.subheader("Refresh Sources")
+
+    a1, a2 = st.columns([1.2, 5])
+
+    with a1:
         if st.button("Wake Backend"):
-            with st.spinner("Waking backend..."):
-                if wait_for_backend_ready():
+            with st.spinner("Waking backend... this can take 1-3 minutes on Render cold start"):
+                if wait_for_backend_ready(max_wait_seconds=180):
                     st.success("Backend is awake")
                     st.cache_data.clear()
                     st.rerun()
                 else:
                     st.error("Backend did not wake up in time")
 
-    with row1[1]:
-        if st.button("Refresh JSearch Jobs"):
-            with st.spinner("Refreshing JSearch jobs..."):
-                result = refresh_source_jobs("/refresh-jsearch")
+    with a2:
+        if st.button("Refresh Counts"):
+            st.cache_data.clear()
+            st.rerun()
 
-            if result["ok"]:
-                data = result["data"]
-                st.success(
-                    f"JSearch refreshed: fetched={data.get('fetched', 0)}, "
-                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
-                    f"skipped={data.get('skipped', 0)}"
-                )
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(
-                    f"JSearch refresh failed | status={result.get('status_code')} | "
-                    f"data={result.get('data')}"
-                )
+    row1 = st.columns(3)
+    row2 = st.columns(3)
+    row3 = st.columns(3)
+
+    with row1[0]:
+        render_source_card(
+            title="JSearch Jobs",
+            source_key="jsearch",
+            endpoint_path="/refresh-jsearch",
+            db_count=debug_counts.get("jsearch", 0),
+            spinner_text="Refreshing JSearch jobs..."
+        )
+
+    with row1[1]:
+        render_source_card(
+            title="LinkedIn Jobs",
+            source_key="linkedin",
+            endpoint_path="/refresh-linkedin",
+            db_count=debug_counts.get("linkedin", 0),
+            spinner_text="Refreshing LinkedIn jobs..."
+        )
 
     with row1[2]:
-        if st.button("Refresh LinkedIn Jobs"):
-            with st.spinner("Refreshing LinkedIn jobs..."):
-                result = refresh_source_jobs("/refresh-linkedin")
-
-            if result["ok"]:
-                data = result["data"]
-                st.success(
-                    f"LinkedIn refreshed: fetched={data.get('fetched', 0)}, "
-                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
-                    f"skipped={data.get('skipped', 0)}"
-                )
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(
-                    f"LinkedIn refresh failed | status={result.get('status_code')} | "
-                    f"data={result.get('data')}"
-                )
-
-    with row1[3]:
-        if st.button("Refresh USAJobs Jobs"):
-            with st.spinner("Refreshing USAJobs jobs..."):
-                result = refresh_source_jobs("/refresh-usajobs")
-
-            if result["ok"]:
-                data = result["data"]
-                st.success(
-                    f"USAJobs refreshed: fetched={data.get('fetched', 0)}, "
-                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
-                    f"skipped={data.get('skipped', 0)}"
-                )
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(
-                    f"USAJobs refresh failed | status={result.get('status_code')} | "
-                    f"data={result.get('data')}"
-                )
+        render_source_card(
+            title="USAJobs Jobs",
+            source_key="usajobs",
+            endpoint_path="/refresh-usajobs",
+            db_count=debug_counts.get("usajobs", 0),
+            spinner_text="Refreshing USAJobs jobs..."
+        )
 
     with row2[0]:
-        if st.button("Refresh Adzuna Jobs"):
-            with st.spinner("Refreshing Adzuna jobs..."):
-                result = refresh_source_jobs("/refresh-adzuna")
-
-            if result["ok"]:
-                data = result["data"]
-                st.success(
-                    f"Adzuna refreshed: fetched={data.get('fetched', 0)}, "
-                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
-                    f"skipped={data.get('skipped', 0)}"
-                )
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(
-                    f"Adzuna refresh failed | status={result.get('status_code')} | "
-                    f"data={result.get('data')}"
-                )
+        render_source_card(
+            title="Adzuna Jobs",
+            source_key="adzuna",
+            endpoint_path="/refresh-adzuna",
+            db_count=debug_counts.get("adzuna", 0),
+            spinner_text="Refreshing Adzuna jobs..."
+        )
 
     with row2[1]:
-        if st.button("Refresh Greenhouse Jobs"):
-            with st.spinner("Refreshing Greenhouse jobs..."):
-                result = refresh_source_jobs("/refresh-greenhouse")
-
-            if result["ok"]:
-                data = result["data"]
-                st.success(
-                    f"Greenhouse refreshed: fetched={data.get('fetched', 0)}, "
-                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
-                    f"skipped={data.get('skipped', 0)}"
-                )
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(
-                    f"Greenhouse refresh failed | status={result.get('status_code')} | "
-                    f"data={result.get('data')}"
-                )
+        render_source_card(
+            title="Greenhouse Jobs",
+            source_key="greenhouse",
+            endpoint_path="/refresh-greenhouse",
+            db_count=debug_counts.get("greenhouse", 0),
+            spinner_text="Refreshing Greenhouse jobs..."
+        )
 
     with row2[2]:
-        if st.button("Refresh Lever Jobs"):
-            with st.spinner("Refreshing Lever jobs..."):
-                result = refresh_source_jobs("/refresh-lever")
-
-            if result["ok"]:
-                data = result["data"]
-                st.success(
-                    f"Lever refreshed: fetched={data.get('fetched', 0)}, "
-                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
-                    f"skipped={data.get('skipped', 0)}"
-                )
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(
-                    f"Lever refresh failed | status={result.get('status_code')} | "
-                    f"data={result.get('data')}"
-                )
-
-    with row2[3]:
-        if st.button("Refresh Remotive Jobs"):
-            with st.spinner("Refreshing Remotive jobs..."):
-                result = refresh_source_jobs("/refresh-remotive")
-
-            if result["ok"]:
-                data = result["data"]
-                st.success(
-                    f"Remotive refreshed: fetched={data.get('fetched', 0)}, "
-                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
-                    f"skipped={data.get('skipped', 0)}"
-                )
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(
-                    f"Remotive refresh failed | status={result.get('status_code')} | "
-                    f"data={result.get('data')}"
-                )
+        render_source_card(
+            title="Lever Jobs",
+            source_key="lever",
+            endpoint_path="/refresh-lever",
+            db_count=debug_counts.get("lever", 0),
+            spinner_text="Refreshing Lever jobs..."
+        )
 
     with row3[0]:
-        if st.button("Refresh Arbeitnow Jobs"):
-            with st.spinner("Refreshing Arbeitnow jobs..."):
-                result = refresh_source_jobs("/refresh-arbeitnow")
-
-            if result["ok"]:
-                data = result["data"]
-                st.success(
-                    f"Arbeitnow refreshed: fetched={data.get('fetched', 0)}, "
-                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
-                    f"skipped={data.get('skipped', 0)}"
-                )
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(
-                    f"Arbeitnow refresh failed | status={result.get('status_code')} | "
-                    f"data={result.get('data')}"
-                )
+        render_source_card(
+            title="Remotive Jobs",
+            source_key="remotive",
+            endpoint_path="/refresh-remotive",
+            db_count=debug_counts.get("remotive", 0),
+            spinner_text="Refreshing Remotive jobs..."
+        )
 
     with row3[1]:
-        if st.button("Refresh Jobicy Jobs"):
-            with st.spinner("Refreshing Jobicy jobs..."):
-                result = refresh_source_jobs("/refresh-jobicy")
+        render_source_card(
+            title="Arbeitnow Jobs",
+            source_key="arbeitnow",
+            endpoint_path="/refresh-arbeitnow",
+            db_count=debug_counts.get("arbeitnow", 0),
+            spinner_text="Refreshing Arbeitnow jobs..."
+        )
 
-            if result["ok"]:
-                data = result["data"]
-                st.success(
-                    f"Jobicy refreshed: fetched={data.get('fetched', 0)}, "
-                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
-                    f"skipped={data.get('skipped', 0)}"
-                )
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(
-                    f"Jobicy refresh failed | status={result.get('status_code')} | "
-                    f"data={result.get('data')}"
-                )
+    with row3[2]:
+        render_source_card(
+            title="Jobicy Jobs",
+            source_key="jobicy",
+            endpoint_path="/refresh-jobicy",
+            db_count=debug_counts.get("jobicy", 0),
+            spinner_text="Refreshing Jobicy jobs..."
+        )
 
     st.write("")
 
