@@ -1,156 +1,202 @@
-import requests
+import hashlib
 from datetime import datetime
-from typing import List
+from typing import Any
 
-from database import Job, get_db
-
-# ---------------- CONFIG ---------------- #
+import requests
 
 LEVER_COMPANIES = [
-    "stripe",
-    "airbnb",
-    "coinbase",
     "netflix",
-    "robinhood",
+    "shopify",
     "affirm",
-    "asana",
-    "canva",
-    "dropbox",
     "figma",
-    "github",
-    "instacart",
-    "lyft",
-    "pinterest",
-    "reddit",
-    "snap",
-    "spotify",
-    "square",
-    "uber",
+    "palantir",
+    "asana",
     "yelp",
+    "square",
+    "scaleai",
 ]
 
-INCLUDE_KEYWORDS = [
+ALLOWED_TITLE_KEYWORDS = [
     "data analyst",
     "business analyst",
-    "analytics",
     "bi analyst",
+    "reporting analyst",
+    "business intelligence analyst",
+    "analytics engineer",
     "product analyst",
+    "marketing analyst",
+    "operations analyst",
+    "insights analyst",
     "decision scientist",
+    "data analytics analyst",
+    "commercial analyst",
+    "financial analyst",
+    "pricing analyst",
+    "risk analyst",
+    "strategy analyst",
 ]
 
-EXCLUDE_KEYWORDS = [
-    "manager",
-    "director",
-    "head",
-    "vp",
-    "principal",
+BLOCKED_TITLE_KEYWORDS = [
+    "data engineer",
+    "machine learning engineer",
+    "ml engineer",
+    "software engineer",
+    "ai engineer",
+    "architect",
+    "recruiter",
+    "talent",
+    "designer",
+    "frontend",
+    "backend",
+    "full stack",
+    "devops",
+    "site reliability",
+    "sre",
+]
+
+SENIOR_BLOCKERS = [
     "staff",
-    "lead",
-    "intern",
+    "principal",
+    "director",
+    "manager",
+    "head of",
+    "vice president",
+    "vp ",
 ]
 
-US_LOCATION_KEYWORDS = [
-    "united states",
-    "usa",
-    "us",
-    "remote - us",
-    "remote, us",
-    "remote (us)",
-]
+REQUEST_TIMEOUT_SECONDS = 20
 
-# ---------------- HELPERS ---------------- #
 
-def is_valid_title(title: str) -> bool:
-    t = title.lower()
+def make_external_id(job: dict[str, Any], company_slug: str) -> str:
+    raw = (
+        str(job.get("id") or "").strip()
+        or str(job.get("hostedUrl") or "").strip()
+        or f"{company_slug}_{job.get('text', '')}"
+    )
+    return "lever_" + hashlib.md5(raw.encode("utf-8")).hexdigest()
 
-    if not any(k in t for k in INCLUDE_KEYWORDS):
+
+def parse_posted_at(value: Any):
+    if not value:
+        return None
+
+    try:
+        # Lever often returns milliseconds timestamp
+        if isinstance(value, (int, float)):
+            if value > 10_000_000_000:
+                return datetime.utcfromtimestamp(value / 1000)
+            return datetime.utcfromtimestamp(value)
+
+        text = str(value).strip()
+        if text.isdigit():
+            num = int(text)
+            if num > 10_000_000_000:
+                return datetime.utcfromtimestamp(num / 1000)
+            return datetime.utcfromtimestamp(num)
+
+        if text.endswith("Z"):
+            text = text.replace("Z", "+00:00")
+
+        dt = datetime.fromisoformat(text)
+        return dt.replace(tzinfo=None) if dt.tzinfo else dt
+    except Exception:
+        return None
+
+
+def is_allowed_title(title: str) -> bool:
+    if not title:
         return False
 
-    if any(k in t for k in EXCLUDE_KEYWORDS):
+    t = title.strip().lower()
+
+    if any(bad in t for bad in BLOCKED_TITLE_KEYWORDS):
         return False
 
-    return True
+    if any(bad in t for bad in SENIOR_BLOCKERS):
+        return False
+
+    if "analytics engineer" in t:
+        return True
+
+    return any(good in t for good in ALLOWED_TITLE_KEYWORDS)
 
 
-def is_us_location(location: str) -> bool:
+def build_location(job: dict[str, Any]) -> str:
+    categories = job.get("categories") or {}
+    location = (categories.get("location") or "").strip()
+
     if not location:
-        return False
+        location = "Unknown"
 
-    loc = location.lower()
-    return any(k in loc for k in US_LOCATION_KEYWORDS)
+    return location
 
 
-# ---------------- MAIN INGESTION ---------------- #
+def normalize_lever_job(job: dict[str, Any], company_slug: str) -> dict[str, Any] | None:
+    title = (job.get("text") or "").strip()
+    if not is_allowed_title(title):
+        return None
 
-def fetch_lever_jobs():
-    db = next(get_db())
+    url = (job.get("hostedUrl") or "").strip()
+    if not url:
+        return None
 
-    total = 0
-    skipped_role = 0
-    skipped_location = 0
-    inserted = 0
+    description = (
+        (job.get("descriptionPlain") or "").strip()
+        or (job.get("description") or "").strip()
+        or ""
+    )
 
-    for company in LEVER_COMPANIES:
-        url = f"https://api.lever.co/v0/postings/{company}?mode=json"
+    location = build_location(job)
+    posted_at = (
+        parse_posted_at(job.get("createdAt"))
+        or parse_posted_at(job.get("updatedAt"))
+    )
+
+    company = company_slug.replace("-", " ").title()
+
+    return {
+        "external_id": make_external_id(job, company_slug),
+        "title": title,
+        "company": company,
+        "location": location,
+        "url": url,
+        "source": "lever",
+        "description": description[:4000],
+        "posted_at": posted_at,
+    }
+
+
+def fetch_lever_jobs() -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str]] = set()
+
+    for company_slug in LEVER_COMPANIES:
+        url = f"https://api.lever.co/v0/postings/{company_slug}?mode=json"
 
         try:
-            resp = requests.get(url, timeout=20)
-            resp.raise_for_status()
-            jobs = resp.json()
+            response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+            response.raise_for_status()
+
+            jobs = response.json()
+            if not isinstance(jobs, list):
+                jobs = []
+
+            print(f"Lever fetched {len(jobs)} raw jobs for {company_slug}", flush=True)
+
+            for raw_job in jobs:
+                normalized = normalize_lever_job(raw_job, company_slug)
+                if not normalized:
+                    continue
+
+                key = (normalized["external_id"], normalized["source"])
+                if key in seen_keys:
+                    continue
+
+                seen_keys.add(key)
+                results.append(normalized)
+
         except Exception as e:
-            print(f"❌ Lever fetch failed for {company}: {e}")
-            continue
+            print(f"⚠️ Lever failed for {company_slug}: {e}", flush=True)
 
-        for job in jobs:
-            total += 1
-
-            title = job.get("text", "").strip()
-            location = job.get("categories", {}).get("location", "")
-            team = job.get("categories", {}).get("team", "")
-            apply_url = job.get("hostedUrl")
-            description = job.get("descriptionPlain", "")
-
-            if not is_valid_title(title):
-                skipped_role += 1
-                continue
-
-            if not is_us_location(location):
-                skipped_location += 1
-                continue
-
-            # Dedup check
-            exists = (
-                db.query(Job)
-                .filter(
-                    Job.title == title,
-                    Job.company == company,
-                    Job.source == "lever",
-                )
-                .first()
-            )
-
-            if exists:
-                continue
-
-            job_row = Job(
-                title=title,
-                company=company,
-                location=location,
-                description=description,
-                apply_url=apply_url,
-                source="lever",
-                posted_date=datetime.utcnow(),
-                is_active=True,
-            )
-
-            db.add(job_row)
-            inserted += 1
-
-        db.commit()
-
-    print(
-        f"✅ Lever summary | total={total}, "
-        f"skipped_role={skipped_role}, "
-        f"skipped_location={skipped_location}, "
-        f"inserted={inserted}"
-    )
+    print(f"✅ Lever normalized jobs count = {len(results)}", flush=True)
+    return results

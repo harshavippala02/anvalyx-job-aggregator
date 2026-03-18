@@ -1,159 +1,197 @@
-import requests
-import re
+import hashlib
 from datetime import datetime
-from sqlalchemy.orm import Session
+from typing import Any
 
-from database import SessionLocal, Job
+import requests
 
-# ---------------- CONFIG ----------------
-
-GREENHOUSE_COMPANIES = [
-    "snowflakecomputing",
-    "databricks",
-    "stripe",
+GREENHOUSE_BOARDS = [
     "airbnb",
-    "linkedin",
-    "dropbox",
-    "asana",
+    "stripe",
     "coinbase",
-    "roblox",
-    "atlassian",
+    "robinhood",
+    "instacart",
+    "reddit",
+    "discord",
+    "notion",
+    "doordash",
+    "databricks",
 ]
 
-ALLOWED_ROLES = [
+ALLOWED_TITLE_KEYWORDS = [
     "data analyst",
     "business analyst",
-    "analytics engineer",
     "bi analyst",
+    "reporting analyst",
+    "business intelligence analyst",
+    "analytics engineer",
     "product analyst",
+    "marketing analyst",
+    "operations analyst",
+    "insights analyst",
+    "decision scientist",
+    "data analytics analyst",
+    "commercial analyst",
+    "financial analyst",
+    "pricing analyst",
+    "risk analyst",
+    "strategy analyst",
 ]
 
-EXCLUDED_KEYWORDS = [
-    "intern",
-    "internship",
-    "student",
-    "phd",
-    "research",
+BLOCKED_TITLE_KEYWORDS = [
+    "data engineer",
+    "machine learning engineer",
+    "ml engineer",
+    "software engineer",
+    "ai engineer",
+    "architect",
+    "recruiter",
+    "talent",
+    "designer",
+    "frontend",
+    "backend",
+    "full stack",
+    "devops",
+    "site reliability",
+    "sre",
 ]
 
-US_KEYWORDS = [
-    "united states",
-    "usa",
-    "us",
-    "remote - us",
-    "remote (us)",
-    "remote, us",
+SENIOR_BLOCKERS = [
+    "staff",
+    "principal",
+    "director",
+    "manager",
+    "head of",
+    "vice president",
+    "vp ",
 ]
 
-# ---------------- HELPERS ----------------
-
-def normalize_title(title: str) -> str:
-    title = title.lower()
-    title = re.sub(r"\b(level|lvl)\b", "", title)
-    title = re.sub(r"\b(i|ii|iii|iv|v|\d+)\b", "", title)
-    return title.strip()
+REQUEST_TIMEOUT_SECONDS = 20
 
 
-def is_allowed_role(title: str) -> bool:
-    title = normalize_title(title)
-    return any(role in title for role in ALLOWED_ROLES)
+def make_external_id(job: dict[str, Any], board: str) -> str:
+    raw = (
+        str(job.get("id") or "").strip()
+        or str(job.get("absolute_url") or "").strip()
+        or f"{board}_{job.get('title', '')}"
+    )
+    return "greenhouse_" + hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
-def is_excluded(title: str) -> bool:
-    title = title.lower()
-    return any(word in title for word in EXCLUDED_KEYWORDS)
+def parse_posted_at(value: Any):
+    if not value:
+        return None
 
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo else value
 
-def is_us_location(location: str) -> bool:
-    location = location.lower()
-    return any(key in location for key in US_KEYWORDS)
-
-
-def extract_location(job: dict) -> str:
-    if job.get("location") and job["location"].get("name"):
-        return job["location"]["name"]
-    return ""
-
-
-def parse_posted_date(job: dict):
     try:
-        return datetime.strptime(job["updated_at"], "%Y-%m-%dT%H:%M:%S.%fZ")
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        return dt.replace(tzinfo=None) if dt.tzinfo else dt
     except Exception:
-        return datetime.utcnow()
+        return None
 
 
-# ---------------- MAIN INGESTION ----------------
+def is_allowed_title(title: str) -> bool:
+    if not title:
+        return False
 
-def fetch_greenhouse_jobs():
-    db: Session = SessionLocal()
+    t = title.strip().lower()
 
-    total = skipped_role = skipped_location = skipped_excluded = inserted = 0
+    if any(bad in t for bad in BLOCKED_TITLE_KEYWORDS):
+        return False
 
-    for company in GREENHOUSE_COMPANIES:
+    if any(bad in t for bad in SENIOR_BLOCKERS):
+        return False
+
+    if "analytics engineer" in t:
+        return True
+
+    return any(good in t for good in ALLOWED_TITLE_KEYWORDS)
+
+
+def build_location(job: dict[str, Any]) -> str:
+    location = (job.get("location", {}) or {}).get("name", "")
+    location = str(location).strip()
+
+    if not location:
+        location = "Unknown"
+
+    return location
+
+
+def normalize_greenhouse_job(job: dict[str, Any], board: str) -> dict[str, Any] | None:
+    title = (job.get("title") or "").strip()
+    if not is_allowed_title(title):
+        return None
+
+    url = (job.get("absolute_url") or "").strip()
+    if not url:
+        return None
+
+    location = build_location(job)
+
+    metadata = job.get("metadata") or []
+    metadata_text = " | ".join(
+        f"{m.get('name', '')}: {m.get('value', '')}"
+        for m in metadata
+        if isinstance(m, dict)
+    ).strip()
+
+    content = (job.get("content") or "").strip()
+    description = content if content else metadata_text
+
+    posted_at = (
+        parse_posted_at(job.get("updated_at"))
+        or parse_posted_at(job.get("created_at"))
+    )
+
+    company = board.replace("-", " ").title()
+
+    return {
+        "external_id": make_external_id(job, board),
+        "title": title,
+        "company": company,
+        "location": location,
+        "url": url,
+        "source": "greenhouse",
+        "description": description[:4000],
+        "posted_at": posted_at,
+    }
+
+
+def fetch_greenhouse_jobs() -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str]] = set()
+
+    for board in GREENHOUSE_BOARDS:
+        url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
+
         try:
-            url = f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs?content=true"
-            resp = requests.get(url, timeout=15)
+            response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+            response.raise_for_status()
 
-            if resp.status_code != 200:
-                print(f"❌ Greenhouse fetch failed for {company}: {resp.status_code}")
-                continue
+            payload = response.json()
+            jobs = payload.get("jobs", [])
 
-            jobs = resp.json().get("jobs", [])
-            if not jobs:
-                continue
+            print(f"Greenhouse fetched {len(jobs)} raw jobs for {board}", flush=True)
 
-            for job in jobs:
-                total += 1
-
-                title = job.get("title", "").strip()
-                if not title:
-                    skipped_role += 1
+            for raw_job in jobs:
+                normalized = normalize_greenhouse_job(raw_job, board)
+                if not normalized:
                     continue
 
-                if is_excluded(title):
-                    skipped_excluded += 1
+                key = (normalized["external_id"], normalized["source"])
+                if key in seen_keys:
                     continue
 
-                if not is_allowed_role(title):
-                    skipped_role += 1
-                    continue
-
-                location = extract_location(job)
-                if not is_us_location(location):
-                    skipped_location += 1
-                    continue
-
-                job_url = job.get("absolute_url")
-                if not job_url:
-                    continue
-
-                # Dedup by URL
-                if db.query(Job).filter(Job.url == job_url).first():
-                    continue
-
-                new_job = Job(
-                    title=title,
-                    company=company.replace("-", " ").title(),
-                    location=location,
-                    url=job_url,
-                    source="greenhouse",
-                    posted_at=parse_posted_date(job),
-                )
-
-                db.add(new_job)
-                inserted += 1
+                seen_keys.add(key)
+                results.append(normalized)
 
         except Exception as e:
-            print(f"❌ Greenhouse error for {company}: {e}")
+            print(f"⚠️ Greenhouse failed for {board}: {e}", flush=True)
 
-    db.commit()
-    db.close()
-
-    print(
-        f"✅ Greenhouse summary | "
-        f"total={total}, "
-        f"skipped_role={skipped_role}, "
-        f"skipped_location={skipped_location}, "
-        f"skipped_excluded={skipped_excluded}, "
-        f"inserted={inserted}"
-    )
+    print(f"✅ Greenhouse normalized jobs count = {len(results)}", flush=True)
+    return results

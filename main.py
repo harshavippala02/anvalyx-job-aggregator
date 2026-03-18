@@ -8,6 +8,8 @@ from sqlalchemy import or_
 from datetime import datetime, timedelta
 from linkedin_client import pull_linkedin_jobs
 from jsearch_client import fetch_jsearch_jobs
+from greenhouse_client import fetch_greenhouse_jobs
+from lever_client import fetch_lever_jobs
 
 # --------------------------------------------------
 # ENV
@@ -187,6 +189,47 @@ def refresh_jsearch():
         "skipped": result["skipped"],
     }
 
+def refresh_greenhouse():
+    print("🔄 Greenhouse refresh started", flush=True)
+
+    jobs = fetch_greenhouse_jobs() or []
+    result = save_jobs(jobs)
+
+    print(
+        f"✅ Greenhouse refreshed | fetched={len(jobs)} "
+        f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}",
+        flush=True
+    )
+
+    return {
+        "status": "ok",
+        "fetched": len(jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
+
+
+def refresh_lever():
+    print("🔄 Lever refresh started", flush=True)
+
+    jobs = fetch_lever_jobs() or []
+    result = save_jobs(jobs)
+
+    print(
+        f"✅ Lever refreshed | fetched={len(jobs)} "
+        f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}",
+        flush=True
+    )
+
+    return {
+        "status": "ok",
+        "fetched": len(jobs),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+    }
+
 
 def refresh_all_sources():
     print("🚀 Full refresh cycle started", flush=True)
@@ -263,6 +306,15 @@ def refresh_usajobs_endpoint():
 @app.post("/refresh-adzuna")
 def refresh_adzuna_endpoint():
     return refresh_adzuna()
+
+@app.post("/refresh-greenhouse")
+def refresh_greenhouse_endpoint():
+    return refresh_greenhouse()
+
+
+@app.post("/refresh-lever")
+def refresh_lever_endpoint():
+    return refresh_lever()
 
 
 # --------------------------------------------------

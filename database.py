@@ -37,7 +37,7 @@ SessionLocal = sessionmaker(
 
 Base = declarative_base()
 
-ACTIVE_SOURCES = ["usajobs", "adzuna", "linkedin","jsearch"]
+ACTIVE_SOURCES = ["usajobs", "adzuna", "linkedin","jsearch","greenhouse", "lever"]
 
 
 # -----------------------------

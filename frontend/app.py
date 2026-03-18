@@ -531,9 +531,10 @@ elif st.session_state.page == "jobs":
     st.caption(f"Backend: {BACKEND_BASE}")
 
     st.subheader("Refresh Sources")
-    wake_col, r1c1, r1c2, r1c3, r1c4 = st.columns(5)
+    row1 = st.columns(4)
+    row2 = st.columns(3)
 
-    with wake_col:
+    with row1[0]:
         if st.button("Wake Backend"):
             with st.spinner("Waking backend..."):
                 if wait_for_backend_ready():
@@ -543,7 +544,7 @@ elif st.session_state.page == "jobs":
                 else:
                     st.error("Backend did not wake up in time")
 
-    with r1c1:
+    with row1[1]:
         if st.button("Refresh JSearch Jobs"):
             with st.spinner("Refreshing JSearch jobs..."):
                 result = refresh_source_jobs("/refresh-jsearch")
@@ -563,7 +564,7 @@ elif st.session_state.page == "jobs":
                     f"data={result.get('data')}"
                 )
 
-    with r1c2:
+    with row1[2]:
         if st.button("Refresh LinkedIn Jobs"):
             with st.spinner("Refreshing LinkedIn jobs..."):
                 result = refresh_source_jobs("/refresh-linkedin")
@@ -583,7 +584,7 @@ elif st.session_state.page == "jobs":
                     f"data={result.get('data')}"
                 )
 
-    with r1c3:
+    with row1[3]:
         if st.button("Refresh USAJobs Jobs"):
             with st.spinner("Refreshing USAJobs jobs..."):
                 result = refresh_source_jobs("/refresh-usajobs")
@@ -603,7 +604,7 @@ elif st.session_state.page == "jobs":
                     f"data={result.get('data')}"
                 )
 
-    with r1c4:
+    with row2[0]:
         if st.button("Refresh Adzuna Jobs"):
             with st.spinner("Refreshing Adzuna jobs..."):
                 result = refresh_source_jobs("/refresh-adzuna")
@@ -620,6 +621,46 @@ elif st.session_state.page == "jobs":
             else:
                 st.error(
                     f"Adzuna refresh failed | status={result.get('status_code')} | "
+                    f"data={result.get('data')}"
+                )
+
+    with row2[1]:
+        if st.button("Refresh Greenhouse Jobs"):
+            with st.spinner("Refreshing Greenhouse jobs..."):
+                result = refresh_source_jobs("/refresh-greenhouse")
+
+            if result["ok"]:
+                data = result["data"]
+                st.success(
+                    f"Greenhouse refreshed: fetched={data.get('fetched', 0)}, "
+                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
+                    f"skipped={data.get('skipped', 0)}"
+                )
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(
+                    f"Greenhouse refresh failed | status={result.get('status_code')} | "
+                    f"data={result.get('data')}"
+                )
+
+    with row2[2]:
+        if st.button("Refresh Lever Jobs"):
+            with st.spinner("Refreshing Lever jobs..."):
+                result = refresh_source_jobs("/refresh-lever")
+
+            if result["ok"]:
+                data = result["data"]
+                st.success(
+                    f"Lever refreshed: fetched={data.get('fetched', 0)}, "
+                    f"inserted={data.get('inserted', 0)}, updated={data.get('updated', 0)}, "
+                    f"skipped={data.get('skipped', 0)}"
+                )
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(
+                    f"Lever refresh failed | status={result.get('status_code')} | "
                     f"data={result.get('data')}"
                 )
 
