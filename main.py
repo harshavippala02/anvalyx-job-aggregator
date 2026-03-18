@@ -6,8 +6,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from datetime import datetime, timedelta
+
 from linkedin_client import pull_linkedin_jobs
 from jsearch_client import fetch_jsearch_jobs
+from adzuna_client import fetch_adzuna_jobs
+from usajobs_client import fetch_usajobs
+
 from backend.jobs.greenhouse_client import fetch_greenhouse_jobs
 from backend.jobs.lever_client import fetch_lever_jobs
 
@@ -34,9 +38,6 @@ from database import (
     normalize_source_value,
     update_job_status,
 )
-
-from adzuna_client import fetch_adzuna_jobs
-from usajobs_client import fetch_usajobs
 
 from backend.ats.ats import router as ats_router
 
@@ -112,13 +113,20 @@ def normalize_linkedin_jobs(raw_jobs):
 # Refresh functions
 # --------------------------------------------------
 def refresh_usajobs():
-    print("Fetching USAJobs...", flush=True)
+    print("🔄 USAJobs refresh started", flush=True)
 
     jobs = fetch_usajobs() or []
     result = save_jobs(jobs)
 
+    print(
+        f"✅ USAJobs refreshed | fetched={len(jobs)} "
+        f"| inserted={result['inserted']} | updated={result['updated']} | skipped={result['skipped']}",
+        flush=True
+    )
+
     return {
         "status": "ok",
+        "source": "usajobs",
         "fetched": len(jobs),
         "inserted": result["inserted"],
         "updated": result["updated"],
@@ -140,6 +148,7 @@ def refresh_adzuna():
 
     return {
         "status": "ok",
+        "source": "adzuna",
         "fetched": len(jobs),
         "inserted": result["inserted"],
         "updated": result["updated"],
@@ -162,6 +171,7 @@ def refresh_linkedin_source():
 
     return {
         "status": "ok",
+        "source": "linkedin",
         "fetched": len(raw_jobs),
         "inserted": result["inserted"],
         "updated": result["updated"],
@@ -183,11 +193,13 @@ def refresh_jsearch():
 
     return {
         "status": "ok",
+        "source": "jsearch",
         "fetched": len(jobs),
         "inserted": result["inserted"],
         "updated": result["updated"],
         "skipped": result["skipped"],
     }
+
 
 def refresh_greenhouse():
     print("🔄 Greenhouse refresh started", flush=True)
@@ -203,6 +215,7 @@ def refresh_greenhouse():
 
     return {
         "status": "ok",
+        "source": "greenhouse",
         "fetched": len(jobs),
         "inserted": result["inserted"],
         "updated": result["updated"],
@@ -224,6 +237,7 @@ def refresh_lever():
 
     return {
         "status": "ok",
+        "source": "lever",
         "fetched": len(jobs),
         "inserted": result["inserted"],
         "updated": result["updated"],
@@ -239,6 +253,8 @@ def refresh_all_sources():
         "adzuna": refresh_adzuna(),
         "linkedin": refresh_linkedin_source(),
         "jsearch": refresh_jsearch(),
+        "greenhouse": refresh_greenhouse(),
+        "lever": refresh_lever(),
     }
 
     print("✅ Full refresh cycle finished", flush=True)
@@ -306,6 +322,7 @@ def refresh_usajobs_endpoint():
 @app.post("/refresh-adzuna")
 def refresh_adzuna_endpoint():
     return refresh_adzuna()
+
 
 @app.post("/refresh-greenhouse")
 def refresh_greenhouse_endpoint():
@@ -742,6 +759,45 @@ def clear_jobs():
         "message": "All jobs cleared successfully",
         "deleted_jobs": deleted
     }
+
+
+@app.get("/admin/clear-source-jobs")
+def clear_source_jobs(source: str):
+    db: Session = SessionLocal()
+    try:
+        normalized_source = normalize_source_value(source)
+        deleted = db.query(Job).filter(Job.source == normalized_source).delete(synchronize_session=False)
+        db.commit()
+
+        return {
+            "message": f"Jobs cleared for source '{normalized_source}'",
+            "deleted_jobs": deleted
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.get("/admin/clear-greenhouse-lever")
+def clear_greenhouse_lever():
+    db: Session = SessionLocal()
+    try:
+        deleted = db.query(Job).filter(
+            Job.source.in_(["greenhouse", "lever"])
+        ).delete(synchronize_session=False)
+        db.commit()
+
+        return {
+            "message": "Greenhouse and Lever jobs cleared successfully",
+            "deleted_jobs": deleted
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 # --------------------------------------------------
