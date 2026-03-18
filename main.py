@@ -8,8 +8,8 @@ from sqlalchemy import or_
 from datetime import datetime, timedelta
 from linkedin_client import pull_linkedin_jobs
 from jsearch_client import fetch_jsearch_jobs
-from greenhouse_client import fetch_greenhouse_jobs
-from lever_client import fetch_lever_jobs
+from backend.jobs.greenhouse_client import fetch_greenhouse_jobs
+from backend.jobs.lever_client import fetch_lever_jobs
 
 # --------------------------------------------------
 # ENV
