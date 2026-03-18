@@ -1,4 +1,5 @@
 import hashlib
+import random
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1306,8 +1307,6 @@ SENIOR_BLOCKERS = [
     "vp",
 ]
 
-# Word-boundary regex — prevents "management" matching "manager",
-# "staffing" matching "staff", "directory" matching "director", etc.
 _SENIOR_BLOCKER_RE = re.compile(
     r'\b(staff|principal|director|manager|head of|vice president|vp)\b',
     re.IGNORECASE,
@@ -1358,6 +1357,8 @@ BLOCKED_LOCATION_KEYWORDS = [
 ]
 
 REQUEST_TIMEOUT_SECONDS = 20
+GREENHOUSE_WORKERS = 10
+MAX_BOARDS_PER_RUN = 50
 
 
 def make_external_id(job: dict[str, Any], board: str) -> str:
@@ -1405,8 +1406,6 @@ def is_allowed_title(title: str) -> bool:
 
 
 def is_allowed_location(location: str) -> bool:
-    # Unknown/blank location: let it pass — many remote-first roles have no location
-    # set in the ATS. work_mode detection in database.py handles these via description.
     if not location or location.strip().lower() in ("unknown", ""):
         return True
 
@@ -1473,13 +1472,9 @@ def normalize_greenhouse_job(job: dict[str, Any], board: str) -> dict[str, Any] 
     }
 
 
-
-GREENHOUSE_WORKERS = 25
-
-
 def _fetch_one_greenhouse(board: str) -> list[dict[str, Any]]:
-    # ?content=true is required — without it the Greenhouse API returns no description
     url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
+
     try:
         response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
 
@@ -1499,6 +1494,7 @@ def _fetch_one_greenhouse(board: str) -> list[dict[str, Any]]:
             normalized = normalize_greenhouse_job(raw_job, board)
             if normalized:
                 out.append(normalized)
+
         return out
 
     except requests.HTTPError as e:
@@ -1517,13 +1513,31 @@ def fetch_greenhouse_jobs() -> list[dict[str, Any]]:
     seen_keys: set[tuple[str, str]] = set()
     lock = threading.Lock()
 
+    boards_to_check = random.sample(
+        GREENHOUSE_BOARDS,
+        min(MAX_BOARDS_PER_RUN, len(GREENHOUSE_BOARDS))
+    )
+
+    print(
+        f"🚀 Greenhouse refresh starting | boards_this_run={len(boards_to_check)} | "
+        f"workers={GREENHOUSE_WORKERS}",
+        flush=True
+    )
+
     with ThreadPoolExecutor(max_workers=GREENHOUSE_WORKERS) as executor:
         futures = {
             executor.submit(_fetch_one_greenhouse, board): board
-            for board in GREENHOUSE_BOARDS
+            for board in boards_to_check
         }
+
         for future in as_completed(futures):
-            jobs = future.result()
+            board = futures[future]
+            try:
+                jobs = future.result()
+            except Exception as e:
+                print(f"⚠️ Greenhouse future failed for {board}: {e}", flush=True)
+                continue
+
             with lock:
                 for job in jobs:
                     key = (job["external_id"], job["source"])
