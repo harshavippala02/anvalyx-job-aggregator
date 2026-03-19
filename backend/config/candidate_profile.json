@@ -1,0 +1,20 @@
+{
+  "first_name": "Harsha Vardhan Reddy",
+  "last_name": "Vippala",
+  "email": "harshareddi.70@gmail.com",
+  "phone": "9894442817",
+  "linkedin": "https://www.linkedin.com/in/harshareddie",
+  "city": "Sterling Heights",
+  "state": "Michigan",
+  "zip": "48310",
+  "country": "USA",
+  "relocation": true,
+  "authorized_to_work_us": true,
+  "requires_visa_sponsorship": false,
+  "years_experience": 4,
+  "education": {
+    "degree": "M.S. in Information Systems",
+    "university": "Central Michigan University",
+    "graduation_year": 2024
+  }
+}

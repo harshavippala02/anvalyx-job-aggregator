@@ -39,6 +39,9 @@ if "ats_cache" not in st.session_state:
 if "source_refresh_results" not in st.session_state:
     st.session_state.source_refresh_results = {}
 
+if "action_result" not in st.session_state:
+    st.session_state.action_result = None
+
 # ---------------- CUSTOM CSS ----------------
 
 st.markdown("""
@@ -141,7 +144,7 @@ footer { display: none !important; }
 
 .info-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 10px;
     margin-top: 14px;
     margin-bottom: 16px;
@@ -256,13 +259,6 @@ footer { display: none !important; }
     border-radius: 10px;
     padding: 10px 12px;
     font-size: 13px;
-}
-
-.summary-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
-    margin-top: 8px;
 }
 
 .summary-box {
@@ -382,7 +378,16 @@ def fetch_summary(search=""):
         ready = wait_for_backend_ready(max_wait_seconds=180)
         if not ready:
             return {
-                "status_counts": {"jobs": 0, "saved": 0, "applied": 0, "skipped": 0},
+                "status_counts": {
+                    "jobs": 0,
+                    "saved": 0,
+                    "applied": 0,
+                    "skipped": 0,
+                    "auto_ready": 0,
+                    "manual_required": 0,
+                    "auto_applied": 0,
+                    "auto_failed": 0,
+                },
                 "day_counts": {"1": 0, "3": 0, "5": 0, "7": 0, "10": 0, "30": 0},
             }
 
@@ -395,12 +400,30 @@ def fetch_summary(search=""):
             return res.json()
 
         return {
-            "status_counts": {"jobs": 0, "saved": 0, "applied": 0, "skipped": 0},
+            "status_counts": {
+                "jobs": 0,
+                "saved": 0,
+                "applied": 0,
+                "skipped": 0,
+                "auto_ready": 0,
+                "manual_required": 0,
+                "auto_applied": 0,
+                "auto_failed": 0,
+            },
             "day_counts": {"1": 0, "3": 0, "5": 0, "7": 0, "10": 0, "30": 0},
         }
     except Exception:
         return {
-            "status_counts": {"jobs": 0, "saved": 0, "applied": 0, "skipped": 0},
+            "status_counts": {
+                "jobs": 0,
+                "saved": 0,
+                "applied": 0,
+                "skipped": 0,
+                "auto_ready": 0,
+                "manual_required": 0,
+                "auto_applied": 0,
+                "auto_failed": 0,
+            },
             "day_counts": {"1": 0, "3": 0, "5": 0, "7": 0, "10": 0, "30": 0},
         }
 
@@ -466,6 +489,27 @@ def refresh_source_jobs(endpoint_path):
         }
 
 
+def run_auto_apply_classification():
+    try:
+        ready = wait_for_backend_ready(max_wait_seconds=180)
+        if not ready:
+            return {
+                "ok": False,
+                "data": {"error": "Backend did not wake up in time"}
+            }
+
+        res = requests.post(f"{BACKEND_BASE}/jobs/classify-auto-apply", timeout=120)
+
+        try:
+            data = res.json()
+        except Exception:
+            data = {"raw_text": res.text}
+
+        return {"ok": res.status_code == 200, "data": data}
+    except Exception as e:
+        return {"ok": False, "data": {"error": str(e)}}
+
+
 def fetch_ats_score(job_id):
     cache = st.session_state.ats_cache
 
@@ -518,13 +562,16 @@ def parse_txt(file):
 
 
 def current_status_filter():
-    if st.session_state.job_view == "saved":
-        return "saved"
-    if st.session_state.job_view == "applied":
-        return "applied"
-    if st.session_state.job_view == "skipped":
-        return "skipped"
-    return None
+    mapping = {
+        "saved": "saved",
+        "applied": "applied",
+        "skipped": "skipped",
+        "auto_ready": "auto_ready",
+        "manual_required": "manual_required",
+        "auto_applied": "auto_applied",
+        "auto_failed": "auto_failed",
+    }
+    return mapping.get(st.session_state.job_view, None)
 
 
 def current_view_label():
@@ -532,7 +579,11 @@ def current_view_label():
         "jobs": "Jobs",
         "saved": "Saved",
         "applied": "Applied",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "auto_ready": "Auto Apply Ready",
+        "manual_required": "Manual Apply Required",
+        "auto_applied": "Auto Applied",
+        "auto_failed": "Auto Failed",
     }
     return mapping.get(st.session_state.job_view, "Jobs")
 
@@ -548,6 +599,7 @@ def render_info_boxes(job, ats_score):
     location_value = build_location_display(job)
     job_type_value = job.get("job_type") or "Unknown"
     ats_value = f"{ats_score}%" if ats_score is not None else "--"
+    apply_type_value = job.get("apply_type") or "Unknown"
 
     st.markdown(
         f"""
@@ -567,6 +619,10 @@ def render_info_boxes(job, ats_score):
             <div class="info-box">
                 <div class="info-label">ATS Score</div>
                 <div class="info-value">{ats_value}</div>
+            </div>
+            <div class="info-box">
+                <div class="info-label">Apply Type</div>
+                <div class="info-value">{apply_type_value}</div>
             </div>
         </div>
         """,
@@ -595,32 +651,99 @@ def render_job_card(job):
     render_info_boxes(job, ats_score)
 
     job_id = job.get("id", job.get("title", "job"))
+    current_view = st.session_state.job_view
 
-    b1, b2, b3 = st.columns([1, 1, 1])
+    if current_view == "auto_ready":
+        b1, b2 = st.columns([1, 1])
 
-    with b1:
-        if st.button("Applied", key=f"applied_{job_id}"):
-            if update_job_status(job_id, "applied"):
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.warning("Could not update status")
+        with b1:
+            if st.button("Move To Manual", key=f"manual_{job_id}"):
+                if update_job_status(job_id, "manual_required"):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Could not update status")
 
-    with b2:
-        if st.button("Skip", key=f"skip_{job_id}"):
-            if update_job_status(job_id, "skipped"):
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.warning("Could not update status")
+        with b2:
+            if st.button("Save", key=f"save_auto_{job_id}"):
+                if update_job_status(job_id, "saved"):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Could not update status")
 
-    with b3:
-        if st.button("Save", key=f"save_{job_id}"):
-            if update_job_status(job_id, "saved"):
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.warning("Could not update status")
+    elif current_view == "manual_required":
+        b1, b2, b3 = st.columns([1, 1, 1])
+
+        with b1:
+            if st.button("Applied", key=f"applied_manual_{job_id}"):
+                if update_job_status(job_id, "applied"):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Could not update status")
+
+        with b2:
+            if st.button("Skip", key=f"skip_manual_{job_id}"):
+                if update_job_status(job_id, "skipped"):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Could not update status")
+
+        with b3:
+            if st.button("Save", key=f"save_manual_{job_id}"):
+                if update_job_status(job_id, "saved"):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Could not update status")
+
+    elif current_view in {"auto_applied", "auto_failed"}:
+        b1, b2 = st.columns([1, 1])
+
+        with b1:
+            if st.button("Mark Applied", key=f"mark_applied_{job_id}"):
+                if update_job_status(job_id, "applied"):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Could not update status")
+
+        with b2:
+            if st.button("Move To Manual", key=f"manual_failed_{job_id}"):
+                if update_job_status(job_id, "manual_required"):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Could not update status")
+
+    else:
+        b1, b2, b3 = st.columns([1, 1, 1])
+
+        with b1:
+            if st.button("Applied", key=f"applied_{job_id}"):
+                if update_job_status(job_id, "applied"):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Could not update status")
+
+        with b2:
+            if st.button("Skip", key=f"skip_{job_id}"):
+                if update_job_status(job_id, "skipped"):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Could not update status")
+
+        with b3:
+            if st.button("Save", key=f"save_{job_id}"):
+                if update_job_status(job_id, "saved"):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Could not update status")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -787,8 +910,8 @@ elif st.session_state.page == "jobs":
         st.markdown(
             f"""
             <div class="summary-box">
-                <div class="summary-label">With Description</div>
-                <div class="summary-value">{debug_counts.get('jobs_with_description', 0)}</div>
+                <div class="summary-label">Auto Ready</div>
+                <div class="summary-value">{debug_counts.get('auto_ready', 0)}</div>
             </div>
             """,
             unsafe_allow_html=True
@@ -798,8 +921,8 @@ elif st.session_state.page == "jobs":
         st.markdown(
             f"""
             <div class="summary-box">
-                <div class="summary-label">Missing Description</div>
-                <div class="summary-value">{debug_counts.get('jobs_missing_description', 0)}</div>
+                <div class="summary-label">Manual Required</div>
+                <div class="summary-value">{debug_counts.get('manual_required', 0)}</div>
             </div>
             """,
             unsafe_allow_html=True
@@ -855,7 +978,7 @@ elif st.session_state.page == "jobs":
     st.write("")
     st.subheader("Refresh Sources")
 
-    a1, a2 = st.columns([1.2, 5])
+    a1, a2, a3 = st.columns([1.2, 1.5, 4])
 
     with a1:
         if st.button("Wake Backend"):
@@ -871,6 +994,27 @@ elif st.session_state.page == "jobs":
         if st.button("Refresh Counts"):
             st.cache_data.clear()
             st.rerun()
+
+    with a3:
+        if st.button("Classify Non-LinkedIn Auto Apply"):
+            with st.spinner("Classifying non-LinkedIn jobs into auto/manual buckets..."):
+                result = run_auto_apply_classification()
+                st.session_state.action_result = result
+                st.cache_data.clear()
+                st.rerun()
+
+    if st.session_state.action_result:
+        result = st.session_state.action_result
+        data = result.get("data", {})
+        if result.get("ok"):
+            st.success(
+                f"Classification complete | scanned={data.get('scanned', 0)} | "
+                f"auto_ready={data.get('auto_ready', 0)} | "
+                f"manual_required={data.get('manual_required', 0)} | "
+                f"unchanged={data.get('unchanged', 0)}"
+            )
+        else:
+            st.error(f"Classification failed: {data.get('error') or data}")
 
     row1 = st.columns(3)
     row2 = st.columns(3)
@@ -985,6 +1129,28 @@ elif st.session_state.page == "jobs":
             st.session_state.job_view = "skipped"
             st.rerun()
 
+    s5, s6, s7, s8 = st.columns([1, 1, 1, 1])
+
+    with s5:
+        if st.button(f"Auto Ready ({status_counts.get('auto_ready', 0)})"):
+            st.session_state.job_view = "auto_ready"
+            st.rerun()
+
+    with s6:
+        if st.button(f"Manual Apply ({status_counts.get('manual_required', 0)})"):
+            st.session_state.job_view = "manual_required"
+            st.rerun()
+
+    with s7:
+        if st.button(f"Auto Applied ({status_counts.get('auto_applied', 0)})"):
+            st.session_state.job_view = "auto_applied"
+            st.rerun()
+
+    with s8:
+        if st.button(f"Auto Failed ({status_counts.get('auto_failed', 0)})"):
+            st.session_state.job_view = "auto_failed"
+            st.rerun()
+
     st.caption(f"Current view: {current_view_label()}")
 
     d1, d2, d3, d4, d5, d6, d7 = st.columns([1, 1, 1, 1, 1, 1, 5])
@@ -1058,6 +1224,13 @@ elif st.session_state.page == "jobs":
 
     if st.session_state.search_query.strip():
         caption_text += f" matching '{st.session_state.search_query}'"
+
+    if st.session_state.job_view == "auto_ready":
+        caption_text += " | LinkedIn excluded"
+    if st.session_state.job_view == "manual_required":
+        caption_text += " | non-LinkedIn manual fallback bucket"
+    if st.session_state.job_view == "auto_applied":
+        caption_text += " | only real auto-applied jobs should appear here"
 
     st.caption(caption_text)
 

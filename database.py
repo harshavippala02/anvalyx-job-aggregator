@@ -147,7 +147,6 @@ def extract_experience_info(title: str | None, description: str | None):
         "campus hire",
     ]
 
-    # Explicit entry-level style
     for kw in junior_keywords:
         if kw in combined:
             return {
@@ -157,7 +156,6 @@ def extract_experience_info(title: str | None, description: str | None):
                 "experience_display": "0-2",
             }
 
-    # Match ranges like 1-3 years / 2 to 4 years / 5–7 years
     range_patterns = [
         r"(\d{1,2})\s*[-–]\s*(\d{1,2})\s*\+?\s*(?:years|year|yrs|yr)",
         r"(\d{1,2})\s*(?:to)\s*(\d{1,2})\s*\+?\s*(?:years|year|yrs|yr)",
@@ -185,7 +183,6 @@ def extract_experience_info(title: str | None, description: str | None):
                 "experience_display": f"{min_years}-{max_years}",
             }
 
-    # Match 3+ years / 6+ years
     plus_patterns = [
         r"(\d{1,2})\s*\+\s*(?:years|year|yrs|yr)",
         r"(?:at least|minimum of|min\.?)\s*(\d{1,2})\s*(?:years|year|yrs|yr)",
@@ -209,7 +206,6 @@ def extract_experience_info(title: str | None, description: str | None):
                 "experience_display": f"{min_years}+",
             }
 
-    # Title-based inference fallback
     for kw in senior_title_keywords:
         if kw in title_text:
             return {
@@ -274,15 +270,12 @@ def should_hide_due_to_experience(
     display = (experience_display or "").strip().lower()
     level = (experience_level or "").strip().lower()
 
-    # Hide 6+
     if display == "6+":
         return True
 
-    # Hide anything whose minimum required experience is 6 or above
     if min_experience_years is not None and min_experience_years >= 6:
         return True
 
-    # Hide ranges like 5-7 or 6-8 when upper bound is 6 or above and range clearly targets senior requirements
     if max_experience_years is not None and max_experience_years >= 7:
         return True
 
@@ -489,7 +482,6 @@ def save_jobs(jobs):
 
             seen_keys.add(key)
 
-            # auto-skip 6+ experience jobs
             if job["auto_skipped_reason"]:
                 job["status"] = "skipped"
             else:
@@ -542,7 +534,6 @@ def save_jobs(jobs):
                         setattr(existing, field, job[field])
                         changed = True
 
-                # keep manual statuses unless current row is still new/skipped-from-auto
                 existing_auto_skip = should_hide_due_to_experience(
                     job["min_experience_years"],
                     job["max_experience_years"],
@@ -585,7 +576,8 @@ def update_job_status(job_id: int, status: str):
             return None
 
         job.status = status
-        if status == "applied":
+
+        if status in {"applied", "auto_applied"}:
             job.applied_at = datetime.utcnow()
 
         db.commit()
@@ -639,6 +631,10 @@ def get_job_counts():
         saved = db.query(Job).filter(Job.status == "saved").count()
         skipped = db.query(Job).filter(Job.status == "skipped").count()
         new_count = db.query(Job).filter(Job.status == "new").count()
+        auto_ready = db.query(Job).filter(Job.status == "auto_ready").count()
+        manual_required = db.query(Job).filter(Job.status == "manual_required").count()
+        auto_applied = db.query(Job).filter(Job.status == "auto_applied").count()
+        auto_failed = db.query(Job).filter(Job.status == "auto_failed").count()
 
         return {
             "all_jobs": total,
@@ -656,6 +652,10 @@ def get_job_counts():
             "saved": saved,
             "applied": applied,
             "skipped": skipped,
+            "auto_ready": auto_ready,
+            "manual_required": manual_required,
+            "auto_applied": auto_applied,
+            "auto_failed": auto_failed,
         }
     finally:
         db.close()

@@ -17,6 +17,7 @@ from backend.jobs.lever_client import fetch_lever_jobs
 from backend.jobs.remotive_client import fetch_remotive_jobs
 from backend.jobs.arbeitnow_client import fetch_arbeitnow_jobs
 from backend.jobs.jobicy_client import fetch_jobicy_jobs
+from backend.auto_apply_classifier import detect_apply_type, classify_auto_apply_status
 
 # --------------------------------------------------
 # ENV
@@ -425,6 +426,8 @@ def refresh_jobicy_endpoint():
 # Helpers
 # --------------------------------------------------
 def serialize_job(j: Job):
+    apply_type = detect_apply_type(j.url, j.source)
+
     return {
         "id": j.id,
         "external_id": j.external_id,
@@ -443,6 +446,7 @@ def serialize_job(j: Job):
         "work_mode": j.work_mode or "Unknown",
         "job_type": j.job_type or "Unknown",
         "auto_skipped_reason": j.auto_skipped_reason,
+        "apply_type": apply_type,
     }
 
 
@@ -527,6 +531,72 @@ def apply_default_experience_visibility(query, status: str | None):
     return query
 
 
+def count_status(base_query, status_value: str):
+    return base_query.filter(Job.status == status_value).count()
+
+
+# --------------------------------------------------
+# Auto-apply classification endpoints
+# --------------------------------------------------
+@app.post("/jobs/classify-auto-apply")
+def classify_non_linkedin_auto_apply():
+    db: Session = SessionLocal()
+
+    try:
+        candidates = (
+            db.query(Job)
+            .filter(Job.source.in_(ACTIVE_SOURCES))
+            .filter(Job.source != "linkedin")
+            .filter(
+                Job.status.in_([
+                    "new",
+                    "saved",
+                    "auto_ready",
+                    "manual_required",
+                    "auto_failed",
+                ])
+            )
+            .all()
+        )
+
+        scanned = 0
+        moved_to_auto_ready = 0
+        moved_to_manual = 0
+        unchanged = 0
+
+        for job in candidates:
+            scanned += 1
+            result = classify_auto_apply_status(job.source, job.url, job.status)
+            target_status = result["status"]
+
+            if job.status != target_status:
+                job.status = target_status
+                if target_status == "auto_ready":
+                    moved_to_auto_ready += 1
+                elif target_status == "manual_required":
+                    moved_to_manual += 1
+            else:
+                unchanged += 1
+
+        db.commit()
+
+        return {
+            "message": "Non-LinkedIn jobs classified for auto apply",
+            "scanned": scanned,
+            "auto_ready": moved_to_auto_ready,
+            "manual_required": moved_to_manual,
+            "unchanged": unchanged,
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+# --------------------------------------------------
+# Jobs summary
+# --------------------------------------------------
 @app.get("/jobs/summary")
 def jobs_summary(search: str | None = None):
     db: Session = SessionLocal()
@@ -563,9 +633,13 @@ def jobs_summary(search: str | None = None):
         summary = {
             "status_counts": {
                 "jobs": jobs_base.filter(Job.status == "new").count(),
-                "saved": base_query.filter(Job.status == "saved").count(),
-                "applied": base_query.filter(Job.status == "applied").count(),
-                "skipped": base_query.filter(Job.status == "skipped").count(),
+                "saved": count_status(base_query, "saved"),
+                "applied": count_status(base_query, "applied"),
+                "skipped": count_status(base_query, "skipped"),
+                "auto_ready": count_status(base_query, "auto_ready"),
+                "manual_required": count_status(base_query, "manual_required"),
+                "auto_applied": count_status(base_query, "auto_applied"),
+                "auto_failed": count_status(base_query, "auto_failed"),
             },
             "day_counts": {
                 "1": count_with_days_and_status(1, None),
@@ -814,6 +888,10 @@ def debug_counts():
         counts["active_sources"] = ACTIVE_SOURCES
         counts["jobs_with_description"] = with_descriptions
         counts["jobs_missing_description"] = missing_descriptions
+        counts["auto_ready"] = db.query(Job).filter(Job.status == "auto_ready").count()
+        counts["manual_required"] = db.query(Job).filter(Job.status == "manual_required").count()
+        counts["auto_applied"] = db.query(Job).filter(Job.status == "auto_applied").count()
+        counts["auto_failed"] = db.query(Job).filter(Job.status == "auto_failed").count()
         return counts
     finally:
         db.close()
@@ -821,7 +899,18 @@ def debug_counts():
 
 @app.post("/jobs/{job_id}/status")
 def set_job_status(job_id: int, status: str = Query(...)):
-    allowed = {"new", "saved", "applied", "skipped"}
+    allowed = {
+        "new",
+        "saved",
+        "applied",
+        "skipped",
+        "auto_ready",
+        "manual_required",
+        "applying",
+        "auto_applied",
+        "auto_failed",
+    }
+
     if status not in allowed:
         raise HTTPException(status_code=400, detail="Invalid status")
 
